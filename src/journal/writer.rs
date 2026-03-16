@@ -2,11 +2,14 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
-use super::entry::{serialize_marker_item, Entry};
+use super::entry::{serialize_item_payload, serialize_marker_item, Entry, Tag};
 use crate::{
-    batch::item::Item as BatchItem, file::fsync_directory, journal::recovery::JournalId,
+    batch::item::Item as BatchItem,
+    file::{fsync_directory, MAGIC_BYTES},
+    journal::recovery::JournalId,
     keyspace::InternalKeyspaceId,
 };
+use byteorder::{LittleEndian, WriteBytesExt};
 use lsm_tree::{CompressionType, SeqNo, ValueType};
 use std::{
     fs::{File, OpenOptions},
@@ -263,46 +266,54 @@ impl Writer {
         Ok(self.buf.len())
     }
 
+    /// Writes a single key-value item using the compact `SingleItem` format.
+    ///
+    /// Layout: `[tag=5][seqno][item_payload][checksum][magic]`
+    ///
+    /// Saves 6 bytes per write vs the full `Start + Item + End` batch encoding
+    /// by eliminating the `item_count` field and two extra tag bytes.
     pub(crate) fn write_raw(
         &mut self,
         keyspace_id: InternalKeyspaceId,
         key: &[u8],
         value: &[u8],
         value_type: ValueType,
-        seqno: u64,
+        seqno: SeqNo,
     ) -> crate::Result<usize> {
         self.is_buffer_dirty = true;
 
-        let mut hasher = xxhash_rust::xxh3::Xxh3::default();
-        let mut byte_count = 0;
-
-        self.buf.clear();
-        byte_count += self.write_start(1, seqno)?;
-        self.buf.clear();
-
-        serialize_marker_item(
-            &mut self.buf,
-            keyspace_id,
-            key,
-            value,
-            value_type,
+        let compression =
             if self.compression_threshold > 0 && value.len() >= self.compression_threshold {
                 self.compression
             } else {
                 CompressionType::None
-            },
-        )?;
+            };
 
+        // Write directly from borrowed slices to avoid copying key/value
+        // into owned Entry. The on-disk layout is shared via
+        // serialize_item_payload (same function used by encode_into).
+        self.buf.clear();
+        self.buf.write_u8(Tag::SingleItem.into())?;
+        self.buf.write_u64::<LittleEndian>(seqno)?;
+
+        // NOTE: SingleItem checksum covers serialize_item_payload output only
+        // (not the Tag::Item byte). This is intentional — SingleItem is a distinct
+        // on-disk format from Start+Item+End batches, with its own checksum scope.
+        // Both encode_into and batch_reader verify use the same scope.
+        let mut hasher = xxhash_rust::xxh3::Xxh3::default();
+        {
+            let mut hw = super::entry::HashingWriter::new(&mut self.buf, &mut hasher);
+            serialize_item_payload(&mut hw, keyspace_id, key, value, value_type, compression)?;
+        }
+        let checksum = hasher.finish();
+
+        self.buf.write_u64::<LittleEndian>(checksum)?;
+        self.buf.write_all(MAGIC_BYTES)?;
+
+        // Single write for entire entry
         self.file.write_all(&self.buf)?;
 
-        hasher.update(&self.buf);
-        byte_count += self.buf.len();
-
-        self.buf.clear();
-        let checksum = hasher.finish();
-        byte_count += self.write_end(checksum)?;
-
-        Ok(byte_count)
+        Ok(self.buf.len())
     }
 
     pub(crate) fn write_clear(
