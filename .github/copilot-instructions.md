@@ -18,6 +18,16 @@ This is a **maintained fork** of [fjall-rs/fjall](https://github.com/fjall-rs/fj
 
 **Prefer issue suggestions over code suggestions for out-of-scope findings.** This keeps PRs focused and reviewable.
 
+## Dependency Policy
+
+**`lsm-tree` uses `branch = "main"` intentionally.** This fork is in active alpha development alongside `structured-world/lsm-tree`. The `branch = "main"` git dependency is correct because:
+- Both repos are under active co-development with frequent cross-repo changes
+- Dependabot tracks and updates git branch dependencies
+- Pinning to `rev` would block Dependabot and require manual bumps on every lsm-tree commit
+- Will switch to a crates.io version once upstream fjall-rs/lsm-tree#265 is released
+
+**Do NOT suggest** pinning to `rev = "..."` or switching to a crates.io version for `lsm-tree`. This is a deliberate alpha-phase decision.
+
 ## Rust Code Standards
 
 - **Unsafe code:** Prefer safe alternatives. `unsafe` requires `// SAFETY:` comment.
