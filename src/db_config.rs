@@ -54,7 +54,7 @@ pub struct Config {
     /// Custom sequence number generator.
     ///
     /// When set, this generator is used instead of the default
-    /// [`SequenceNumberCounter`](lsm_tree::SequenceNumberCounter).
+    /// [`SequenceNumberCounter`].
     pub(crate) seqno_generator: Option<SharedSequenceNumberGenerator>,
 }
 

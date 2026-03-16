@@ -196,7 +196,7 @@ impl<O: Openable> Builder<O> {
     /// internal storage layer. Accepting a generic would add a type parameter to
     /// `Builder` that propagates through `Config` and `Database`.
     ///
-    /// By default, the database uses [`SequenceNumberCounter`](lsm_tree::SequenceNumberCounter),
+    /// By default, the database uses [`SequenceNumberCounter`],
     /// a simple atomic counter. Use this to plug in a custom generator,
     /// e.g., a Hybrid Logical Clock (HLC) for distributed databases.
     ///
@@ -208,7 +208,7 @@ impl<O: Openable> Builder<O> {
     ///
     /// ```
     /// use fjall::Database;
-    /// use lsm_tree::{SharedSequenceNumberGenerator, SequenceNumberCounter};
+    /// use fjall::{SharedSequenceNumberGenerator, SequenceNumberCounter};
     /// use std::sync::Arc;
     ///
     /// # let folder = tempfile::tempdir()?;
