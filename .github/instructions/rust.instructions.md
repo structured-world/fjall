@@ -29,7 +29,7 @@ Focus review effort on real bugs, not cosmetics. Stop after finding issues in hi
 - Hardcoded secrets, credentials, or private URLs
 
 ### Tier 3 — API Design and Robustness (flag if clear improvement)
-- Public API missing `#[must_use]` on `Result`-returning methods
+- Public API missing `#[must_use]` on builder-style methods returning `Self`, `Option`, or custom result-like types (`Result` itself is already `#[must_use]`)
 - `pub` visibility where `pub(crate)` suffices
 - Missing `Send + Sync` bounds on types used across threads
 - `Clone` on large types where a reference would work
@@ -47,9 +47,9 @@ These are not actionable review findings. Do not raise them:
 - **Comment precision**: "returns the value" when it technically returns `Result<Option<Value>>` — the comment conveys meaning, not the type signature.
 - **Magic numbers with context**: `4096` for block size, `10` for L0 threshold in a test with an explanatory comment or assertion message. Do not suggest named constants when the value is used once with sufficient context.
 - **Minor naming preferences**: `opts` vs `options`, `cf` vs `column_family`, `kv` vs `key_value` — these are team style, not bugs.
-- **Import organization**: Single unused import that clippy would catch anyway.
+- **Import ordering**: Grouping or ordering of import statements is style, not a finding. (Unused imports ARE actionable — they trigger `-D warnings` in CI.)
 - **Test code style**: Tests prioritize readability and explicitness over DRY. Repeated setup code in tests is acceptable.
-- **`#[allow(clippy::...)]` with justification comment**: Respect the author's suppression if explained.
+- **`#[allow(clippy::...)]` in existing upstream code**: Respect existing suppressions with justification. New code in this fork should use `#[expect(clippy::...)]` per the Rust-Specific Standards section.
 - **Partition/keyspace naming in tests**: Names like `"default"`, `"test"`, `"data"` in test code are fine — they exist for clarity, not production naming standards.
 - **Compaction/flush thresholds in tests**: Specific numeric values for segment size, L0 threshold, or memtable size in tests are chosen for test speed and determinism, not production tuning.
 
