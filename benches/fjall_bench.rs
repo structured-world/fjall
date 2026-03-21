@@ -138,10 +138,10 @@ fn tx_conflict_rate(c: &mut Criterion) {
                     let mut tx2 = db.write_tx().unwrap();
 
                     // Both read and write key 0
-                    let _ = tx1.get(ks.inner(), 0u64.to_be_bytes());
+                    tx1.get(ks.inner(), 0u64.to_be_bytes()).unwrap();
                     tx1.insert(ks.inner(), 0u64.to_be_bytes(), b"tx1");
 
-                    let _ = tx2.get(ks.inner(), 0u64.to_be_bytes());
+                    tx2.get(ks.inner(), 0u64.to_be_bytes()).unwrap();
                     tx2.insert(ks.inner(), 0u64.to_be_bytes(), b"tx2");
 
                     // First commit succeeds
@@ -180,8 +180,8 @@ fn recovery_time(c: &mut Criterion) {
             |b, &count| {
                 b.iter_batched(
                     || {
-                        // Setup: populate database, then close it (drop without clean shutdown
-                        // is not possible here, but journal entries remain for recovery)
+                        // Setup: populate database then drop it. Measures reopen time
+                        // which includes journal replay for any unflushed entries.
                         let tmpdir = tempfile::tempdir().unwrap();
                         {
                             let db = Database::builder(tmpdir.path()).open().unwrap();
@@ -192,7 +192,7 @@ fn recovery_time(c: &mut Criterion) {
                                 ks.insert(i.to_be_bytes(), b"value_data_for_recovery")
                                     .unwrap();
                             }
-                            // Drop triggers flush, but journal entries still need replay
+                            // Drop flushes memtables to segments; journal cleanup follows
                         }
                         tmpdir
                     },
