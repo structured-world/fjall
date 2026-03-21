@@ -49,6 +49,114 @@ fn journal_single_item_write_and_recovery() -> crate::Result<()> {
 }
 
 #[test]
+#[cfg(feature = "lz4")]
+fn journal_single_item_write_and_recovery_lz4() -> crate::Result<()> {
+    let dir1 = tempdir()?;
+    let db = crate::Database::builder(&dir1).open()?;
+    let keyspace = db.keyspace("default", Default::default)?;
+
+    let dir2 = tempdir()?;
+    let path = dir2.path().join("0.jnl");
+
+    {
+        let journal = Journal::create_new(&path)?.with_compression(CompressionType::Lz4, 1);
+        let mut writer = journal.get_writer();
+
+        writer.write_raw(keyspace.id, b"k1", b"value_one", ValueType::Value, 0)?;
+        writer.write_raw(keyspace.id, b"k2", b"value_two", ValueType::Value, 1)?;
+    }
+
+    // Recover and verify — checksum is verified from raw on-disk bytes,
+    // not by re-compressing the decompressed value.
+    let journal = Journal::from_file(&path)?;
+    let reader = journal.get_reader()?;
+    let batches: Vec<_> = reader.flatten().collect();
+
+    assert_eq!(batches.len(), 2);
+    assert_eq!(batches[0].items[0].key.as_ref(), b"k1");
+    assert_eq!(batches[0].items[0].value.as_ref(), b"value_one");
+    assert_eq!(batches[1].items[0].key.as_ref(), b"k2");
+    assert_eq!(batches[1].items[0].value.as_ref(), b"value_two");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "lz4")]
+fn journal_single_item_checksum_mismatch_lz4() -> crate::Result<()> {
+    let dir1 = tempdir()?;
+    let db = crate::Database::builder(&dir1).open()?;
+    let keyspace = db.keyspace("default", Default::default)?;
+
+    let dir2 = tempdir()?;
+    let path = dir2.path().join("0.jnl");
+
+    {
+        let journal = Journal::create_new(&path)?.with_compression(CompressionType::Lz4, 1);
+        let mut writer = journal.get_writer();
+        writer.write_raw(
+            keyspace.id,
+            b"key",
+            b"compressed_value",
+            ValueType::Value,
+            0,
+        )?;
+    }
+
+    // First recovery truncates pre-allocated space
+    {
+        let journal = Journal::from_file(&path)?;
+        let reader = journal.get_reader()?;
+        let batches: Vec<_> = reader.flatten().collect();
+        assert_eq!(batches.len(), 1);
+    }
+
+    // Corrupt a byte in the compressed payload
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)?;
+
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+
+        let header_len: usize = 1 + 8; // tag + seqno
+        let trailer_len: usize = 8 + MAGIC_BYTES.len();
+        assert!(
+            buf.len() >= header_len + trailer_len,
+            "entry too small to contain header ({header_len}) and trailer ({trailer_len})",
+        );
+        let payload_end = buf.len() - trailer_len;
+
+        // Flip a byte in the payload region
+        buf[header_len + 10] ^= 0xFF;
+
+        // Ensure we didn't accidentally corrupt the trailer
+        assert!(payload_end > header_len + 10);
+
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&buf)?;
+        file.sync_all()?;
+    }
+
+    let journal = Journal::from_file(&path)?;
+    let reader = journal.get_reader()?;
+    let batches: Vec<_> = reader.collect();
+
+    // With LZ4, corrupted compressed bytes may cause decompression to fail
+    // before reaching the checksum comparison. The reader treats this as an
+    // incomplete write and truncates, yielding either an error or no batches.
+    let ok_batches: Vec<_> = batches.iter().filter_map(|b| b.as_ref().ok()).collect();
+    assert!(
+        ok_batches.is_empty() || batches.iter().any(|b| b.is_err()),
+        "expected corruption to be detected, got: {batches:?}",
+    );
+
+    Ok(())
+}
+
+#[test]
 #[expect(clippy::redundant_clone)]
 fn journal_mixed_single_and_batch() -> crate::Result<()> {
     let dir1 = tempdir()?;
@@ -147,7 +255,6 @@ fn journal_truncation_corrupt_single_item() -> crate::Result<()> {
 }
 
 #[test]
-#[expect(clippy::expect_used)]
 fn journal_single_item_checksum_mismatch() -> crate::Result<()> {
     let dir1 = tempdir()?;
     let db = crate::Database::builder(&dir1).open()?;
@@ -175,7 +282,6 @@ fn journal_single_item_checksum_mismatch() -> crate::Result<()> {
     // Corrupt a byte in the payload while keeping the trailer intact.
     // The initial recovery above truncated the file from its pre-allocated
     // 64MB down to last_valid_pos, so buf.len() now equals the entry size.
-    // We still locate the trailer via MAGIC_BYTES scan for robustness.
     {
         let mut file = std::fs::OpenOptions::new()
             .read(true)
@@ -185,20 +291,17 @@ fn journal_single_item_checksum_mismatch() -> crate::Result<()> {
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
 
-        // Find actual entry end by locating MAGIC_BYTES trailer from the end.
         // Entry layout: tag(1) + seqno(8) + payload(...) + checksum(8) + magic(4)
-        let magic_len = MAGIC_BYTES.len();
-        let entry_end = buf
-            .windows(magic_len)
-            .rposition(|w| w == MAGIC_BYTES)
-            .expect("should find magic bytes at end of entry")
-            + magic_len;
-        assert_eq!(entry_end, buf.len(), "magic bytes must terminate the entry");
-
+        // Use length-based offsets instead of scanning for MAGIC_BYTES,
+        // which could match payload data and find the wrong position.
         let header_len: usize = 1 + 8; // tag + seqno
-        let trailer_len: usize = 8 + 4; // checksum + magic
+        let trailer_len: usize = 8 + MAGIC_BYTES.len(); // checksum + magic
+        assert!(
+            buf.len() >= header_len + trailer_len,
+            "entry too small to contain header ({header_len}) and trailer ({trailer_len})",
+        );
         let payload_start = header_len;
-        let payload_end = entry_end - trailer_len;
+        let payload_end = buf.len() - trailer_len;
 
         assert!(
             payload_end > payload_start,
@@ -206,7 +309,7 @@ fn journal_single_item_checksum_mismatch() -> crate::Result<()> {
         );
 
         // Corrupt the last byte of the value data (avoids hitting length
-        // fields which would trigger debug_assert before checksum check).
+        // fields which would trigger a parse error before checksum check).
         let flip_index = payload_end - 1;
         buf[flip_index] ^= 0xFF;
 
@@ -282,6 +385,7 @@ fn journal_single_item_inside_batch_discarded() -> crate::Result<()> {
         Entry::SingleItem {
             seqno: 1,
             checksum: 0,
+            payload_checksum: 0,
             keyspace_id: keyspace.id,
             key: vec![1, 2, 3].into(),
             value: vec![4, 5, 6].into(),
