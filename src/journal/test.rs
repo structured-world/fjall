@@ -49,6 +49,110 @@ fn journal_single_item_write_and_recovery() -> crate::Result<()> {
 }
 
 #[test]
+#[cfg(feature = "lz4")]
+fn journal_single_item_write_and_recovery_lz4() -> crate::Result<()> {
+    let dir1 = tempdir()?;
+    let db = crate::Database::builder(&dir1).open()?;
+    let keyspace = db.keyspace("default", Default::default)?;
+
+    let dir2 = tempdir()?;
+    let path = dir2.path().join("0.jnl");
+
+    {
+        let journal = Journal::create_new(&path)?.with_compression(CompressionType::Lz4, 1);
+        let mut writer = journal.get_writer();
+
+        writer.write_raw(keyspace.id, b"k1", b"value_one", ValueType::Value, 0)?;
+        writer.write_raw(keyspace.id, b"k2", b"value_two", ValueType::Value, 1)?;
+    }
+
+    // Recover and verify — checksum is verified from raw on-disk bytes,
+    // not by re-compressing the decompressed value.
+    let journal = Journal::from_file(&path)?;
+    let reader = journal.get_reader()?;
+    let batches: Vec<_> = reader.flatten().collect();
+
+    assert_eq!(batches.len(), 2);
+    assert_eq!(batches[0].items[0].key.as_ref(), b"k1");
+    assert_eq!(batches[0].items[0].value.as_ref(), b"value_one");
+    assert_eq!(batches[1].items[0].key.as_ref(), b"k2");
+    assert_eq!(batches[1].items[0].value.as_ref(), b"value_two");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "lz4")]
+fn journal_single_item_checksum_mismatch_lz4() -> crate::Result<()> {
+    let dir1 = tempdir()?;
+    let db = crate::Database::builder(&dir1).open()?;
+    let keyspace = db.keyspace("default", Default::default)?;
+
+    let dir2 = tempdir()?;
+    let path = dir2.path().join("0.jnl");
+
+    {
+        let journal = Journal::create_new(&path)?.with_compression(CompressionType::Lz4, 1);
+        let mut writer = journal.get_writer();
+        writer.write_raw(
+            keyspace.id,
+            b"key",
+            b"compressed_value",
+            ValueType::Value,
+            0,
+        )?;
+    }
+
+    // First recovery truncates pre-allocated space
+    {
+        let journal = Journal::from_file(&path)?;
+        let reader = journal.get_reader()?;
+        let batches: Vec<_> = reader.flatten().collect();
+        assert_eq!(batches.len(), 1);
+    }
+
+    // Corrupt a byte in the compressed payload
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)?;
+
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+
+        let header_len: usize = 1 + 8; // tag + seqno
+        let trailer_len: usize = 8 + MAGIC_BYTES.len();
+        let payload_end = buf.len() - trailer_len;
+
+        // Flip a byte in the payload region
+        buf[header_len + 10] ^= 0xFF;
+
+        // Ensure we didn't accidentally corrupt the trailer
+        assert!(payload_end > header_len + 10);
+
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&buf)?;
+        file.sync_all()?;
+    }
+
+    let journal = Journal::from_file(&path)?;
+    let reader = journal.get_reader()?;
+    let batches: Vec<_> = reader.collect();
+
+    // With LZ4, corrupted compressed bytes may cause decompression to fail
+    // before reaching the checksum comparison. The reader treats this as an
+    // incomplete write and truncates, yielding either an error or no batches.
+    let ok_batches: Vec<_> = batches.iter().filter_map(|b| b.as_ref().ok()).collect();
+    assert!(
+        ok_batches.is_empty() || batches.iter().any(|b| b.is_err()),
+        "expected corruption to be detected, got: {batches:?}",
+    );
+
+    Ok(())
+}
+
+#[test]
 #[expect(clippy::redundant_clone)]
 fn journal_mixed_single_and_batch() -> crate::Result<()> {
     let dir1 = tempdir()?;
