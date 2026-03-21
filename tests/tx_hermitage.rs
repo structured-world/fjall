@@ -27,6 +27,7 @@ struct TestEnv {
 fn setup() -> Result<TestEnv> {
     let tmpdir = tempfile::tempdir()?;
     let db = OptimisticTxDatabase::builder(tmpdir.path()).open()?;
+    // keyspace() takes impl FnOnce() — passing the function item directly is correct
     let ks = db.keyspace("test", KeyspaceCreateOptions::default)?;
     Ok(TestEnv {
         db,

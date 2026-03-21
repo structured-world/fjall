@@ -137,21 +137,14 @@ fn tx_conflict_rate(c: &mut Criterion) {
                     let mut tx1 = db.write_tx().unwrap();
                     let mut tx2 = db.write_tx().unwrap();
 
-                    // Both read (for_update) and write key 0; assert seeded key visible
-                    assert!(
-                        tx1.get_for_update(ks.inner(), 0u64.to_be_bytes())
-                            .unwrap()
-                            .is_some(),
-                        "seeded key 0 must be present for tx1"
-                    );
+                    // Both read (for_update) and write key 0.
+                    // debug_assert: verify seeded key exists without skewing bench measurements.
+                    let v1 = tx1.get_for_update(ks.inner(), 0u64.to_be_bytes()).unwrap();
+                    debug_assert!(v1.is_some(), "seeded key 0 must be present for tx1");
                     tx1.insert(ks.inner(), 0u64.to_be_bytes(), b"tx1");
 
-                    assert!(
-                        tx2.get_for_update(ks.inner(), 0u64.to_be_bytes())
-                            .unwrap()
-                            .is_some(),
-                        "seeded key 0 must be present for tx2"
-                    );
+                    let v2 = tx2.get_for_update(ks.inner(), 0u64.to_be_bytes()).unwrap();
+                    debug_assert!(v2.is_some(), "seeded key 0 must be present for tx2");
                     tx2.insert(ks.inner(), 0u64.to_be_bytes(), b"tx2");
 
                     // First commit must succeed; a conflict here is a bug
