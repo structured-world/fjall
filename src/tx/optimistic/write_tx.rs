@@ -150,8 +150,10 @@ impl WriteTransaction {
     /// let mut tx = db.write_tx()?;
     /// let val = tx.get_for_update(&tree, "a")?;
     /// assert!(val.is_some());
-    /// // This read is tracked: concurrent writes to "a" will cause a conflict
-    /// assert!(matches!(tx.commit()?, Ok(())));
+    /// // This read is tracked: concurrent writes to "a" will cause a conflict.
+    /// // `commit()` returns an I/O result whose success value is a conflict result.
+    /// // Here we assert that both layers are OK (no I/O error, no conflict).
+    /// assert!(tx.commit()?.is_ok());
     /// #
     /// # Ok::<(), fjall::Error>(())
     /// ```
@@ -1010,6 +1012,9 @@ mod tests {
         assert_eq!(tx1.get(env.tree.inner(), "a")?, Some("1".into()));
         tx1.insert(env.tree.inner(), "b", "2");
 
+        // read-your-own-write: see the insert within the same tx
+        assert_eq!(tx1.get(env.tree.inner(), "b")?, Some("2".into()));
+
         // tx2 writes to "a" (which tx1 read)
         tx2.insert(env.tree.inner(), "a", "modified");
         tx2.commit()??;
@@ -1034,6 +1039,10 @@ mod tests {
         let count = tx1.range(&env.tree, "a"..="b").count();
         assert_eq!(count, 2);
         tx1.insert(env.tree.inner(), "c", "3");
+
+        // read-your-own-write: range sees the insert within the same tx
+        let count_with_ryow = tx1.range(&env.tree, "a"..="c").count();
+        assert_eq!(count_with_ryow, 3);
 
         // tx2 writes inside the range tx1 read
         tx2.insert(env.tree.inner(), "a", "modified");
