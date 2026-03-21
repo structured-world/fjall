@@ -3,7 +3,7 @@
 > **Maintained fork** of [fjall-rs/fjall](https://github.com/fjall-rs/fjall) by [Structured World Foundation](https://sw.foundation) for the CoordiNode database engine.
 > Fork epoch starts at **v4.0.0** — upstream tags use no prefix (`3.1.1`), fork tags use `v`-prefix (`v4.0.0`).
 
-# 4.0.0
+## 4.0.0
 
 Fork epoch release. Aligned with lsm-tree v4.0.0 (V4 disk format).
 
@@ -26,12 +26,12 @@ Fork epoch release. Aligned with lsm-tree v4.0.0 (V4 disk format).
 - [ci] Dependabot for cargo and actions dependencies
 - [deps] Bumped lz4_flex from 0.11 to 0.13
 
-# 3.1.0
+## 3.1.0
 
 - [feat] Implemented support for compaction filters (custom logic during compactions)
 - [msrv] Reduced MSRV to 1.90
 
-# 3.0.0
+## 3.0.0
 
 - [feat] Implemented new block format in `lsm-tree`
 - [feat] Bookkeep LSM-tree changes (flushes, compactions) in `Version` history
