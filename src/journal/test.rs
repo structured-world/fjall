@@ -123,6 +123,10 @@ fn journal_single_item_checksum_mismatch_lz4() -> crate::Result<()> {
 
         let header_len: usize = 1 + 8; // tag + seqno
         let trailer_len: usize = 8 + MAGIC_BYTES.len();
+        assert!(
+            buf.len() >= header_len + trailer_len,
+            "entry too small to contain header ({header_len}) and trailer ({trailer_len})",
+        );
         let payload_end = buf.len() - trailer_len;
 
         // Flip a byte in the payload region
@@ -292,6 +296,10 @@ fn journal_single_item_checksum_mismatch() -> crate::Result<()> {
         // which could match payload data and find the wrong position.
         let header_len: usize = 1 + 8; // tag + seqno
         let trailer_len: usize = 8 + MAGIC_BYTES.len(); // checksum + magic
+        assert!(
+            buf.len() >= header_len + trailer_len,
+            "entry too small to contain header ({header_len}) and trailer ({trailer_len})",
+        );
         let payload_start = header_len;
         let payload_end = buf.len() - trailer_len;
 
