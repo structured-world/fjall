@@ -74,7 +74,7 @@ impl Oracle {
 
 #[cfg(test)]
 mod tests {
-    use crate::{KeyspaceCreateOptions, OptimisticTxDatabase, OptimisticTxKeyspace, Readable};
+    use crate::{KeyspaceCreateOptions, OptimisticTxDatabase, OptimisticTxKeyspace};
 
     #[expect(clippy::significant_drop_tightening)]
     fn run_tx(
@@ -88,7 +88,7 @@ mod tests {
         tx1.commit()??;
         assert!(tree.contains_key("hello")?);
 
-        _ = tx2.get(tree.inner(), "hello")?;
+        _ = tx2.get_for_update(tree.inner(), "hello")?;
 
         tx2.insert(tree.inner(), "hello", "world2");
         assert!(tx2.commit()?.is_err()); // intended to conflict
