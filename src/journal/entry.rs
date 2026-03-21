@@ -235,16 +235,28 @@ fn decode_item_payload<R: Read>(
     let value = match compression {
         CompressionType::None => {
             debug_assert_eq!(value_len, on_disk_value_len);
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "u32 → usize: lossless on 32-bit+, but may truncate on 16-bit"
+            )]
             Slice::from_reader(reader, on_disk_value_len as usize)?
         }
 
         #[cfg(feature = "lz4")]
         CompressionType::Lz4 => {
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "u32 → usize: lossless on 32-bit+, but may truncate on 16-bit"
+            )]
             let compressed_value = Slice::from_reader(reader, on_disk_value_len as usize)?;
 
             #[expect(
                 unsafe_code,
                 reason = "unzeroed buffer for LZ4 decompression performance"
+            )]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "u32 → usize: lossless on 32-bit+, but may truncate on 16-bit"
             )]
             // SAFETY: decompress_into writes exactly value_len bytes on success
             // (validated by the size check below). The buffer is fully initialized
