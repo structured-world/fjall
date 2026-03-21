@@ -2,12 +2,13 @@
 name = "fjall"
 description = "Log-structured, embeddable key-value storage engine"
 license = "MIT OR Apache-2.0"
-version = "3.1.1"
+version = "4.0.0"
 edition = "2021"
 rust-version = "1.90.0"
 readme = "README.md"
 include = ["src/**/*", "LICENSE-APACHE", "LICENSE-MIT", "README.md"]
-repository = "https://github.com/fjall-rs/fjall"
+repository = "https://github.com/structured-world/fjall"
+# homepage points to upstream — docs.rs and project docs live there
 homepage = "https://github.com/fjall-rs/fjall"
 keywords = ["database", "key-value", "lsm", "rocksdb", "leveldb"]
 categories = ["data-structures", "database-implementations", "algorithms"]
@@ -26,10 +27,10 @@ __internal_whitebox = []
 [dependencies]
 byteorder = { package = "byteorder-lite", version = "0.1.0" }
 byteview = "~0.10.1"
-# Fork with SequenceNumberGenerator trait (structured-world/lsm-tree#10).
-# branch=main: active development, Dependabot tracks updates.
-# Switch to crates.io once fjall-rs/lsm-tree#265 is released.
-lsm-tree = { git = "https://github.com/structured-world/lsm-tree.git", branch = "main", default-features = false, features = [] }
+# Fork with V4 disk format + SequenceNumberGenerator trait (structured-world/lsm-tree#10).
+# TODO(#24): pin to tag = "v4.0.0" once lsm-tree release management is done.
+# Pinned to rev for reproducible builds until tag exists.
+lsm-tree = { git = "https://github.com/structured-world/lsm-tree.git", rev = "c03a443515ce90b70d40200d679c77a170209d83", default-features = false, features = [] }
 log = "0.4.27"
 tempfile = "3.20.0"
 dashmap = "6.1.0"

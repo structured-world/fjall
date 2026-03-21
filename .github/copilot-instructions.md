@@ -20,13 +20,13 @@ This is a **maintained fork** of [fjall-rs/fjall](https://github.com/fjall-rs/fj
 
 ## Dependency Policy
 
-**`lsm-tree` uses `branch = "main"` intentionally.** This fork is in active alpha development alongside `structured-world/lsm-tree`. The `branch = "main"` git dependency is correct because:
-- Both repos are under active co-development with frequent cross-repo changes
-- Dependabot tracks and updates git branch dependencies
-- Pinning to `rev` would block Dependabot and require manual bumps on every lsm-tree commit
-- Will switch to a crates.io version once upstream fjall-rs/lsm-tree#265 is released
+**`lsm-tree` is pinned to a full 40-char git `rev`.** This ensures reproducible builds for tagged fjall releases. The rev is updated when lsm-tree cuts a new release tag.
 
-**Do NOT suggest** pinning to `rev = "..."` or switching to a crates.io version for `lsm-tree`. This is a deliberate alpha-phase decision.
+**Do NOT suggest** switching to `branch = "main"` or to a crates.io version for `lsm-tree`. The tag/rev pinning is a deliberate release management decision (#24).
+
+## Release Configuration
+
+**`.release-plz.toml` uses Tera template syntax:** `tag_name = "v{{ version }}"`. The spaces inside `{{ }}` are standard Tera convention (same as Jinja2). Do NOT suggest removing them — both `{{ version }}` and `{{version}}` are equivalent in Tera.
 
 ## Rust Code Standards
 
