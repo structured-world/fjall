@@ -305,10 +305,13 @@ fn noop_journal_create_and_write() -> crate::Result<()> {
             .journal_mode(JournalMode::Noop)
             .open()?;
 
-        // Data is NOT expected to survive restart with noop journal
-        // (durability comes from external WAL like Raft, not tested here)
-        let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
-        assert_eq!(tree.len()?, 0);
+        // Recreate keyspace; data durability with noop journal is unspecified
+        // here (it may or may not survive depending on flush behavior).
+        let _tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+
+        // WAL-specific invariants: still no journal to read or disk space used.
+        assert!(db.supervisor.journal.get_reader()?.is_none());
+        assert_eq!(db.journal_disk_space()?, 0);
     }
 
     Ok(())

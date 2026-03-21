@@ -39,6 +39,10 @@ use std::{
 ///     .unwrap();
 /// ```
 #[expect(clippy::missing_errors_doc)]
+#[expect(
+    clippy::len_without_is_empty,
+    reason = "len() returns file size (includes pre-allocated space), not entry count — is_empty() would be misleading"
+)]
 pub trait JournalWriter: Send {
     /// Writes a single key-value item using the compact `SingleItem` format.
     fn write_raw(
@@ -67,12 +71,10 @@ pub trait JournalWriter: Send {
     fn pos(&mut self) -> crate::Result<u64>;
 
     /// Returns the total size in bytes of the journal.
+    ///
+    /// For file-based journals this is the file size (which may include
+    /// pre-allocated space), not the number of written entries.
     fn len(&self) -> crate::Result<u64>;
-
-    /// Returns `true` if the journal has zero size.
-    fn is_empty(&self) -> crate::Result<bool> {
-        Ok(self.len()? == 0)
-    }
 
     /// Seals the current journal and creates a new one.
     /// Returns `(sealed_path, new_path)`.
