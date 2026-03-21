@@ -73,6 +73,9 @@
 #![doc(html_favicon_url = "https://raw.githubusercontent.com/fjall-rs/fjall/main/logo.png")]
 #![deny(unsafe_code)]
 #![deny(clippy::all, missing_docs, clippy::cargo)]
+// lsm-tree uses lz4_flex 0.13 while fjall uses 0.11 — transitive dep mismatch
+// that cannot be resolved without upgrading lz4_flex in fjall or waiting for alignment.
+#![allow(clippy::multiple_crate_versions)]
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::indexing_slicing)]
 #![warn(clippy::pedantic, clippy::nursery)]

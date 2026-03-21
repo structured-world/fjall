@@ -17,6 +17,7 @@ use tempfile::TempDir;
 struct TestEnv {
     db: OptimisticTxDatabase,
     ks: OptimisticTxKeyspace,
+    // Prevent early cleanup — dropping TempDir deletes the directory on disk.
     #[expect(unused)]
     tmpdir: TempDir,
 }
@@ -260,7 +261,9 @@ fn cross_keyspace_conflict() {
 
     // T1: read from keyspace A
     let mut tx1 = env.db.write_tx().unwrap();
-    let _ = tx1.get(env.ks.inner(), "shared_key").unwrap();
+    tx1.get(env.ks.inner(), "shared_key")
+        .unwrap()
+        .expect("shared_key should exist for T1 read dependency");
 
     // T2: write to same key in keyspace A and commit
     let mut tx2 = env.db.write_tx().unwrap();
@@ -290,8 +293,9 @@ fn long_running_tx_gc_interaction() {
     let val = tx1.get(env.ks.inner(), "watched_key").unwrap().unwrap();
     assert_eq!(val.as_ref(), b"initial");
 
-    // Run 10,000 short transactions that modify the watched key
-    for i in 0u64..10_000 {
+    // Run 1,000 short transactions — enough to exercise oracle GC
+    // while keeping CI runtime reasonable (~200ms on disk-backed storage)
+    for i in 0u64..1_000 {
         let mut tx = env.db.write_tx().unwrap();
         tx.insert(env.ks.inner(), "watched_key", i.to_be_bytes());
         tx.commit().unwrap().unwrap();

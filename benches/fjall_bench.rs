@@ -76,7 +76,8 @@ fn partition_switch(c: &mut Criterion) {
 fn tx_commit(c: &mut Criterion) {
     let mut group = c.benchmark_group("tx_commit");
 
-    // Single-threaded OCC commit throughput (non-conflicting keys)
+    // Measures single-threaded OCC commit overhead (oracle lock, conflict check,
+    // journal write). Multi-threaded contention benchmarks belong in tx_conflict_rate.
     for tx_count in [100_usize, 500, 1_000] {
         group.throughput(Throughput::Elements(tx_count as u64));
 
