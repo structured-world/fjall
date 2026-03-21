@@ -206,6 +206,11 @@ impl From<Tag> for u8 {
 
 /// Decodes item payload fields (everything after the tag byte) from a reader.
 /// Shared between `Tag::Item` and `Tag::SingleItem` decoding.
+///
+/// The `u32 as usize` casts use target-gated `#[expect(clippy::cast_possible_truncation)]`
+/// to enforce the expectation only on 16-bit targets where truncation is possible,
+/// without triggering `unfulfilled_lint_expectations` on 32/64-bit hosts.
+/// Per-statement attributes are kept for symmetry with [`serialize_item_payload`].
 fn decode_item_payload<R: Read>(
     reader: &mut R,
 ) -> Result<
@@ -235,16 +240,37 @@ fn decode_item_payload<R: Read>(
     let value = match compression {
         CompressionType::None => {
             debug_assert_eq!(value_len, on_disk_value_len);
+            #[cfg_attr(
+                target_pointer_width = "16",
+                expect(
+                    clippy::cast_possible_truncation,
+                    reason = "u32 → usize may truncate on 16-bit usize targets"
+                )
+            )]
             Slice::from_reader(reader, on_disk_value_len as usize)?
         }
 
         #[cfg(feature = "lz4")]
         CompressionType::Lz4 => {
+            #[cfg_attr(
+                target_pointer_width = "16",
+                expect(
+                    clippy::cast_possible_truncation,
+                    reason = "u32 → usize may truncate on 16-bit usize targets"
+                )
+            )]
             let compressed_value = Slice::from_reader(reader, on_disk_value_len as usize)?;
 
             #[expect(
                 unsafe_code,
                 reason = "unzeroed buffer for LZ4 decompression performance"
+            )]
+            #[cfg_attr(
+                target_pointer_width = "16",
+                expect(
+                    clippy::cast_possible_truncation,
+                    reason = "u32 → usize may truncate on 16-bit usize targets"
+                )
             )]
             // SAFETY: decompress_into writes exactly value_len bytes on success
             // (validated by the size check below). The buffer is fully initialized
