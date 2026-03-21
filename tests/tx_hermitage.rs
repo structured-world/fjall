@@ -6,7 +6,7 @@
 //!
 //! Tests adapted from the Hermitage project methodology to verify that fjall's
 //! SSI implementation correctly prevents all serialization anomalies.
-//! See: <http://ithare.com/testing-database-transaction-isolation/>
+//! See: <https://ithare.com/testing-database-transaction-isolation/>
 //!
 //! All reads that participate in conflict detection use `*_for_update()` methods.
 //! Snapshot reads (`Readable::get`) are non-serializable and intentionally skip
@@ -120,7 +120,8 @@ fn phantom_read_in_range_prevented() -> Result {
     env.ks.insert("item_m", b"2")?;
     env.ks.insert("item_z", b"3")?;
 
-    // T1: scan range to count items (for_update → range tracked)
+    // T1: scan range to count items (for_update → range tracked).
+    // Iter::Item = Guard (not Result), so .count() is safe — no errors to propagate.
     let mut tx1 = env.db.write_tx()?;
     let count: usize = tx1
         .range_for_update(env.ks.inner(), "item_a"..="item_z")
@@ -153,7 +154,8 @@ fn phantom_read_in_prefix_prevented() -> Result {
     env.ks.insert("user:1", b"alice")?;
     env.ks.insert("user:2", b"bob")?;
 
-    // T1: prefix scan (for_update → prefix range tracked)
+    // T1: prefix scan (for_update → prefix range tracked).
+    // Iter::Item = Guard (not Result), so .count() is safe.
     let mut tx1 = env.db.write_tx()?;
     let count: usize = tx1.prefix_for_update(env.ks.inner(), "user:").count();
     assert_eq!(count, 2);
