@@ -82,6 +82,10 @@ pub trait JournalWriter: Send {
     fn set_compression(&mut self, comp: CompressionType, threshold: usize);
 
     /// Returns the path of the journal file, if applicable.
+    ///
+    /// Returns owned `PathBuf` because `dyn JournalWriter` behind `Mutex<Box<_>>`
+    /// cannot return borrows tied to the inner state. Called infrequently
+    /// (recovery + debug), not on the write hot path.
     fn path(&self) -> Option<PathBuf>;
 }
 
@@ -469,11 +473,11 @@ impl JournalWriter for Writer {
         value_type: ValueType,
         seqno: SeqNo,
     ) -> crate::Result<usize> {
-        self.write_raw(keyspace_id, key, value, value_type, seqno)
+        Writer::write_raw(self, keyspace_id, key, value, value_type, seqno)
     }
 
     fn write_batch(&mut self, items: &[BatchItem], seqno: SeqNo) -> crate::Result<usize> {
-        self.write_batch_impl(items, seqno)
+        Writer::write_batch_impl(self, items, seqno)
     }
 
     fn write_clear(
@@ -481,27 +485,27 @@ impl JournalWriter for Writer {
         keyspace_id: InternalKeyspaceId,
         seqno: SeqNo,
     ) -> crate::Result<usize> {
-        self.write_clear(keyspace_id, seqno)
+        Writer::write_clear(self, keyspace_id, seqno)
     }
 
     fn persist(&mut self, mode: PersistMode) -> std::io::Result<()> {
-        self.persist(mode)
+        Writer::persist(self, mode)
     }
 
     fn pos(&mut self) -> crate::Result<u64> {
-        self.pos()
+        Writer::pos(self)
     }
 
     fn len(&self) -> crate::Result<u64> {
-        self.len()
+        Writer::len(self)
     }
 
     fn rotate(&mut self) -> crate::Result<(PathBuf, PathBuf)> {
-        self.rotate()
+        Writer::rotate(self)
     }
 
     fn set_compression(&mut self, comp: CompressionType, threshold: usize) {
-        self.set_compression(comp, threshold);
+        Writer::set_compression(self, comp, threshold);
     }
 
     fn path(&self) -> Option<PathBuf> {

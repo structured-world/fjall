@@ -45,10 +45,12 @@ impl JournalWriter for NoopWriter {
         Ok(())
     }
 
+    /// Always returns 0 — prevents journal rotation (triggered when `pos() > 64MB`).
     fn pos(&mut self) -> crate::Result<u64> {
         Ok(0)
     }
 
+    /// Always returns 0 — reports no disk usage for journal space accounting.
     fn len(&self) -> crate::Result<u64> {
         Ok(0)
     }
