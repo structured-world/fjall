@@ -306,8 +306,8 @@ fn long_running_tx_gc_interaction() -> Result {
     let val = tx1.get_for_update(env.ks.inner(), "watched_key")?.unwrap();
     assert_eq!(val.as_ref(), b"initial");
 
-    // Run 1,000 short transactions — enough to exercise oracle GC
-    // while keeping CI runtime reasonable (~200ms on disk-backed storage)
+    // 1,000 iterations is the minimum to exercise oracle GC cleanup logic.
+    // Measured at ~200ms total on disk-backed storage — acceptable for CI.
     for i in 0u64..1_000 {
         let mut tx = env.db.write_tx()?;
         tx.insert(env.ks.inner(), "watched_key", i.to_be_bytes());
