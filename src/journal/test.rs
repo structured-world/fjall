@@ -147,7 +147,6 @@ fn journal_truncation_corrupt_single_item() -> crate::Result<()> {
 }
 
 #[test]
-#[expect(clippy::expect_used)]
 fn journal_single_item_checksum_mismatch() -> crate::Result<()> {
     let dir1 = tempdir()?;
     let db = crate::Database::builder(&dir1).open()?;
@@ -175,7 +174,6 @@ fn journal_single_item_checksum_mismatch() -> crate::Result<()> {
     // Corrupt a byte in the payload while keeping the trailer intact.
     // The initial recovery above truncated the file from its pre-allocated
     // 64MB down to last_valid_pos, so buf.len() now equals the entry size.
-    // We still locate the trailer via MAGIC_BYTES scan for robustness.
     {
         let mut file = std::fs::OpenOptions::new()
             .read(true)
@@ -185,20 +183,13 @@ fn journal_single_item_checksum_mismatch() -> crate::Result<()> {
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
 
-        // Find actual entry end by locating MAGIC_BYTES trailer from the end.
         // Entry layout: tag(1) + seqno(8) + payload(...) + checksum(8) + magic(4)
-        let magic_len = MAGIC_BYTES.len();
-        let entry_end = buf
-            .windows(magic_len)
-            .rposition(|w| w == MAGIC_BYTES)
-            .expect("should find magic bytes at end of entry")
-            + magic_len;
-        assert_eq!(entry_end, buf.len(), "magic bytes must terminate the entry");
-
+        // Use length-based offsets instead of scanning for MAGIC_BYTES,
+        // which could match payload data and find the wrong position.
         let header_len: usize = 1 + 8; // tag + seqno
-        let trailer_len: usize = 8 + 4; // checksum + magic
+        let trailer_len: usize = 8 + MAGIC_BYTES.len(); // checksum + magic
         let payload_start = header_len;
-        let payload_end = entry_end - trailer_len;
+        let payload_end = buf.len() - trailer_len;
 
         assert!(
             payload_end > payload_start,
@@ -206,7 +197,7 @@ fn journal_single_item_checksum_mismatch() -> crate::Result<()> {
         );
 
         // Corrupt the last byte of the value data (avoids hitting length
-        // fields which would trigger debug_assert before checksum check).
+        // fields which would trigger a parse error before checksum check).
         let flip_index = payload_end - 1;
         buf[flip_index] ^= 0xFF;
 
@@ -282,6 +273,7 @@ fn journal_single_item_inside_batch_discarded() -> crate::Result<()> {
         Entry::SingleItem {
             seqno: 1,
             checksum: 0,
+            payload_checksum: 0,
             keyspace_id: keyspace.id,
             key: vec![1, 2, 3].into(),
             value: vec![4, 5, 6].into(),

@@ -40,6 +40,30 @@ impl<W: Write, H: Hasher> Write for HashingWriter<'_, W, H> {
     }
 }
 
+/// Read adapter that hashes bytes as they are read from the inner reader.
+/// Used by `SingleItem` decoding to compute the checksum from raw on-disk
+/// bytes without a temporary buffer or re-serialization.
+struct HashingReader<'a, R: Read, H: Hasher> {
+    inner: &'a mut R,
+    hasher: &'a mut H,
+}
+
+impl<'a, R: Read, H: Hasher> HashingReader<'a, R, H> {
+    fn new(inner: &'a mut R, hasher: &'a mut H) -> Self {
+        Self { inner, hasher }
+    }
+}
+
+impl<R: Read, H: Hasher> Read for HashingReader<'_, R, H> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if let Some(read_bytes) = buf.get(..n) {
+            self.hasher.write(read_bytes);
+        }
+        Ok(n)
+    }
+}
+
 /// Journal entry. Batches are encoded either as:
 /// - a `Start` entry, followed by N `Item` entries, followed by an `End` entry, or
 /// - a single `SingleItem` entry (compact encoding for single-item batches).
@@ -76,7 +100,12 @@ pub enum Entry {
     /// with how multi-item batch checksums are handled).
     SingleItem {
         seqno: SeqNo,
+        /// Checksum read from on-disk trailer (the expected value).
         checksum: u64,
+        /// Checksum computed from raw on-disk payload bytes during decode.
+        /// Compared against `checksum` by `JournalBatchReader` to verify
+        /// integrity without re-serialization or re-compression.
+        payload_checksum: u64,
         keyspace_id: InternalKeyspaceId,
         key: UserKey,
         value: UserValue,
@@ -280,7 +309,8 @@ impl Entry {
             }
             SingleItem {
                 seqno,
-                checksum,
+                checksum: _,
+                payload_checksum: _,
                 keyspace_id,
                 key,
                 value,
@@ -306,18 +336,10 @@ impl Entry {
                 }
                 let computed_checksum = hasher.finish();
 
-                // The checksum field is dual-purpose:
-                //   - During encoding: ignored (always recomputed from payload).
-                //     Callers may pass 0. The hot path (write_raw) bypasses
-                //     Entry entirely and writes directly from borrowed slices.
-                //   - During decoding: populated from the on-disk bytes and
-                //     verified by JournalBatchReader.
-                // debug_assert catches test mistakes where a pre-computed
-                // checksum doesn't match, but is not a runtime invariant.
-                debug_assert!(
-                    *checksum == 0 || *checksum == computed_checksum,
-                    "SingleItem checksum field does not match computed checksum"
-                );
+                // The checksum and payload_checksum fields are ignored during
+                // encoding — the checksum is always recomputed from the
+                // serialized payload. The hot path (write_raw) bypasses Entry
+                // entirely and writes directly from borrowed slices.
 
                 writer.write_u64::<LittleEndian>(computed_checksum)?;
                 writer.write_all(MAGIC_BYTES)?;
@@ -365,8 +387,15 @@ impl Entry {
             Tag::SingleItem => {
                 let seqno = reader.read_u64::<LittleEndian>()?;
 
-                let (keyspace_id, key, value, value_type, compression) =
-                    decode_item_payload(reader)?;
+                // Hash raw on-disk payload bytes during decode so that
+                // checksum verification compares against the original bytes,
+                // not a re-serialized (and potentially re-compressed) copy.
+                let mut hasher = xxhash_rust::xxh3::Xxh3::default();
+                let (keyspace_id, key, value, value_type, compression) = {
+                    let mut hashing_reader = HashingReader::new(reader, &mut hasher);
+                    decode_item_payload(&mut hashing_reader)?
+                };
+                let payload_checksum = hasher.finish();
 
                 // Read checksum + trailer (verification deferred to JournalBatchReader,
                 // consistent with how multi-item batch checksums are handled)
@@ -382,6 +411,7 @@ impl Entry {
                 Ok(Self::SingleItem {
                     seqno,
                     checksum,
+                    payload_checksum,
                     keyspace_id,
                     key,
                     value,
@@ -484,6 +514,7 @@ mod tests {
         let entry = Entry::SingleItem {
             seqno: 42,
             checksum,
+            payload_checksum: checksum,
             keyspace_id: 7,
             key: vec![1, 2, 3].into(),
             value: vec![4, 5, 6].into(),
@@ -512,6 +543,7 @@ mod tests {
         let single = Entry::SingleItem {
             seqno: 1,
             checksum,
+            payload_checksum: checksum,
             keyspace_id: 0,
             key: key.clone().into(),
             value: value.clone().into(),
