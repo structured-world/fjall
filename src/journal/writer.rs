@@ -30,12 +30,13 @@ use std::{
 /// A no-op journal for Raft-based systems where durability is handled
 /// by the consensus layer:
 ///
-/// ```ignore
-/// use fjall::journal::NoopWriter;
+/// ```no_run
+/// use fjall::{Database, JournalMode};
 ///
-/// let db = Database::builder(path)
+/// let db = Database::builder("path/to/db")
 ///     .journal_mode(JournalMode::Noop)
-///     .open()?;
+///     .open()
+///     .unwrap();
 /// ```
 #[expect(clippy::missing_errors_doc)]
 pub trait JournalWriter: Send {
