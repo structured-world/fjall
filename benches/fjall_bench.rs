@@ -157,9 +157,9 @@ fn tx_conflict_rate(c: &mut Criterion) {
                         Err(e) => panic!("unexpected error on tx1: {e}"),
                     }
 
-                    // Second commit should conflict (read set invalidated by tx1)
+                    // Second commit must conflict (read set invalidated by tx1)
                     match tx2.commit() {
-                        Ok(Ok(())) => {}
+                        Ok(Ok(())) => panic!("tx2 committed without conflict — SSI violation"),
                         Ok(Err(_conflict)) => conflicts += 1,
                         Err(e) => panic!("unexpected error on tx2: {e}"),
                     }
@@ -184,35 +184,30 @@ fn recovery_time(c: &mut Criterion) {
             BenchmarkId::from_parameter(entry_count),
             &entry_count,
             |b, &count| {
-                b.iter_batched(
-                    || {
-                        // Setup: populate database then drop it. Measures reopen time
-                        // which includes journal replay for any unflushed entries.
-                        let tmpdir = tempfile::tempdir().unwrap();
-                        {
-                            let db = Database::builder(tmpdir.path()).open().unwrap();
-                            let ks = db
-                                .keyspace("bench", KeyspaceCreateOptions::default)
-                                .unwrap();
-                            for i in 0..count {
-                                ks.insert(i.to_be_bytes(), b"value_data_for_recovery")
-                                    .unwrap();
-                            }
-                            // Drop flushes memtables to segments; journal cleanup follows
-                        }
-                        tmpdir
-                    },
-                    |tmpdir| {
-                        // Measure: reopen (includes journal recovery)
-                        let db = Database::builder(tmpdir.path()).open().unwrap();
-                        let ks = db
-                            .keyspace("bench", KeyspaceCreateOptions::default)
+                // One-time setup: populate database, then measure reopen time only
+                let tmpdir = tempfile::tempdir().unwrap();
+                {
+                    let db = Database::builder(tmpdir.path()).open().unwrap();
+                    let ks = db
+                        .keyspace("bench", KeyspaceCreateOptions::default)
+                        .unwrap();
+                    for i in 0..count {
+                        ks.insert(i.to_be_bytes(), b"value_data_for_recovery")
                             .unwrap();
-                        // Verify at least one key to prevent dead-code elimination
-                        assert!(ks.get(0usize.to_be_bytes()).unwrap().is_some());
-                    },
-                    criterion::BatchSize::PerIteration,
-                );
+                    }
+                    // Drop flushes memtables to segments; journal cleanup follows
+                }
+                let path = tmpdir.path().to_path_buf();
+
+                b.iter(|| {
+                    // Measure: reopen (includes journal recovery)
+                    let db = Database::builder(&path).open().unwrap();
+                    let ks = db
+                        .keyspace("bench", KeyspaceCreateOptions::default)
+                        .unwrap();
+                    // Verify at least one key to prevent dead-code elimination
+                    assert!(ks.get(0usize.to_be_bytes()).unwrap().is_some());
+                });
             },
         );
     }
