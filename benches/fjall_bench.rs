@@ -1,0 +1,213 @@
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use fjall::{Database, KeyspaceCreateOptions, OptimisticTxDatabase, Readable};
+
+const BATCH_SIZE: usize = 1_000;
+
+fn keyspace_write(c: &mut Criterion) {
+    let mut group = c.benchmark_group("keyspace_write");
+
+    for value_size in [64_usize, 1_024, 65_536] {
+        group.throughput(Throughput::Bytes((value_size * BATCH_SIZE) as u64));
+
+        group.bench_with_input(
+            BenchmarkId::from_parameter(value_size),
+            &value_size,
+            |b, &size| {
+                let value = vec![0xABu8; size];
+
+                b.iter_batched(
+                    || {
+                        let tmpdir = tempfile::tempdir().unwrap();
+                        let db = Database::builder(tmpdir.path()).open().unwrap();
+                        let ks = db
+                            .keyspace("bench", KeyspaceCreateOptions::default)
+                            .unwrap();
+                        (tmpdir, db, ks)
+                    },
+                    |(_tmpdir, _db, ks)| {
+                        for i in 0..BATCH_SIZE {
+                            ks.insert(i.to_be_bytes(), &value).unwrap();
+                        }
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn partition_switch(c: &mut Criterion) {
+    let mut group = c.benchmark_group("partition_switch");
+
+    group.throughput(Throughput::Elements(BATCH_SIZE as u64));
+
+    group.bench_function("10_keyspaces", |b| {
+        b.iter_batched(
+            || {
+                let tmpdir = tempfile::tempdir().unwrap();
+                let db = Database::builder(tmpdir.path()).open().unwrap();
+                let keyspaces: Vec<_> = (0..10)
+                    .map(|i| {
+                        db.keyspace(&format!("ks_{i}"), KeyspaceCreateOptions::default)
+                            .unwrap()
+                    })
+                    .collect();
+                (tmpdir, db, keyspaces)
+            },
+            |(_tmpdir, _db, keyspaces)| {
+                for i in 0..BATCH_SIZE {
+                    let ks = &keyspaces[i % keyspaces.len()];
+                    ks.insert(i.to_be_bytes(), b"value").unwrap();
+                }
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
+fn tx_commit(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tx_commit");
+
+    // Single-threaded OCC commit throughput (non-conflicting keys)
+    for tx_count in [100_usize, 500, 1_000] {
+        group.throughput(Throughput::Elements(tx_count as u64));
+
+        group.bench_with_input(
+            BenchmarkId::from_parameter(tx_count),
+            &tx_count,
+            |b, &count| {
+                b.iter_batched(
+                    || {
+                        let tmpdir = tempfile::tempdir().unwrap();
+                        let db = OptimisticTxDatabase::builder(tmpdir.path()).open().unwrap();
+                        let ks = db
+                            .keyspace("bench", KeyspaceCreateOptions::default)
+                            .unwrap();
+                        (tmpdir, db, ks)
+                    },
+                    |(_tmpdir, db, ks)| {
+                        for i in 0..count {
+                            let mut tx = db.write_tx().unwrap();
+                            tx.insert(ks.inner(), i.to_be_bytes(), b"value");
+                            tx.commit().unwrap().unwrap();
+                        }
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn tx_conflict_rate(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tx_conflict_rate");
+
+    // Measure how many transactions conflict when all target the same small key range
+    group.throughput(Throughput::Elements(100));
+
+    group.bench_function("hot_key_range", |b| {
+        b.iter_batched(
+            || {
+                let tmpdir = tempfile::tempdir().unwrap();
+                let db = OptimisticTxDatabase::builder(tmpdir.path()).open().unwrap();
+                let ks = db
+                    .keyspace("bench", KeyspaceCreateOptions::default)
+                    .unwrap();
+                // Seed 10 keys
+                for i in 0u64..10 {
+                    ks.insert(i.to_be_bytes(), b"init").unwrap();
+                }
+                (tmpdir, db, ks)
+            },
+            |(_tmpdir, db, ks)| {
+                let mut conflicts = 0u64;
+                for _ in 0..100 {
+                    let mut tx = db.write_tx().unwrap();
+                    // Read key 0, write key 0 (creates read+write conflict with concurrent txns)
+                    let _ = tx.get(ks.inner(), 0u64.to_be_bytes());
+                    tx.insert(ks.inner(), 0u64.to_be_bytes(), b"updated");
+                    match tx.commit() {
+                        Ok(Ok(())) => {}
+                        Ok(Err(_conflict)) => conflicts += 1,
+                        Err(e) => panic!("unexpected error: {e}"),
+                    }
+                }
+                // Return conflicts count so criterion doesn't optimize it away
+                conflicts
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
+fn recovery_time(c: &mut Criterion) {
+    let mut group = c.benchmark_group("recovery_time");
+    group.sample_size(10); // Recovery is slow, fewer samples
+
+    for entry_count in [1_000_usize, 10_000, 100_000] {
+        group.throughput(Throughput::Elements(entry_count as u64));
+
+        group.bench_with_input(
+            BenchmarkId::from_parameter(entry_count),
+            &entry_count,
+            |b, &count| {
+                b.iter_batched(
+                    || {
+                        // Setup: populate database, then close it (drop without clean shutdown
+                        // is not possible here, but journal entries remain for recovery)
+                        let tmpdir = tempfile::tempdir().unwrap();
+                        {
+                            let db = Database::builder(tmpdir.path()).open().unwrap();
+                            let ks = db
+                                .keyspace("bench", KeyspaceCreateOptions::default)
+                                .unwrap();
+                            for i in 0..count {
+                                ks.insert(i.to_be_bytes(), b"value_data_for_recovery")
+                                    .unwrap();
+                            }
+                            // Drop triggers flush, but journal entries still need replay
+                        }
+                        tmpdir
+                    },
+                    |tmpdir| {
+                        // Measure: reopen (includes journal recovery)
+                        let db = Database::builder(tmpdir.path()).open().unwrap();
+                        let ks = db
+                            .keyspace("bench", KeyspaceCreateOptions::default)
+                            .unwrap();
+                        // Verify at least one key to prevent dead-code elimination
+                        assert!(ks.get(0usize.to_be_bytes()).unwrap().is_some());
+                    },
+                    criterion::BatchSize::PerIteration,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// TODO: concurrent_merge benchmark deferred — merge operators are at lsm-tree level,
+// not exposed through fjall's public API. See structured-world/lsm-tree#42.
+
+criterion_group!(
+    benches,
+    keyspace_write,
+    partition_switch,
+    tx_commit,
+    tx_conflict_rate,
+    recovery_time,
+);
+criterion_main!(benches);
