@@ -7,6 +7,11 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use tempfile::tempdir;
 use test_log::test;
 
+/// Test helper: file-based journals always have a reader.
+fn must_get_reader(journal: &Journal) -> crate::Result<batch_reader::JournalBatchReader> {
+    journal.get_reader()?.ok_or(crate::Error::Unrecoverable)
+}
+
 #[test]
 fn journal_single_item_write_and_recovery() -> crate::Result<()> {
     let dir1 = tempdir()?;
@@ -28,7 +33,7 @@ fn journal_single_item_write_and_recovery() -> crate::Result<()> {
 
     // Recover and verify
     let journal = Journal::from_file(&path)?;
-    let reader = journal.get_reader()?;
+    let reader = must_get_reader(&journal)?;
     let batches: Vec<_> = reader.flatten().collect();
 
     assert_eq!(batches.len(), 3);
@@ -69,7 +74,7 @@ fn journal_single_item_write_and_recovery_lz4() -> crate::Result<()> {
     // Recover and verify — checksum is verified from raw on-disk bytes,
     // not by re-compressing the decompressed value.
     let journal = Journal::from_file(&path)?;
-    let reader = journal.get_reader()?;
+    let reader = must_get_reader(&journal)?;
     let batches: Vec<_> = reader.flatten().collect();
 
     assert_eq!(batches.len(), 2);
@@ -106,7 +111,7 @@ fn journal_single_item_checksum_mismatch_lz4() -> crate::Result<()> {
     // First recovery truncates pre-allocated space
     {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let batches: Vec<_> = reader.flatten().collect();
         assert_eq!(batches.len(), 1);
     }
@@ -141,7 +146,7 @@ fn journal_single_item_checksum_mismatch_lz4() -> crate::Result<()> {
     }
 
     let journal = Journal::from_file(&path)?;
-    let reader = journal.get_reader()?;
+    let reader = must_get_reader(&journal)?;
     let batches: Vec<_> = reader.collect();
 
     // With LZ4, corrupted compressed bytes may cause decompression to fail
@@ -178,7 +183,7 @@ fn journal_mixed_single_and_batch() -> crate::Result<()> {
             BatchItem::new(keyspace.clone(), *b"batch_a", *b"ba", ValueType::Value),
             BatchItem::new(keyspace.clone(), *b"batch_b", *b"bb", ValueType::Value),
         ];
-        writer.write_batch(batch_items.iter(), 2, 1)?;
+        writer.write_batch(&batch_items, 1)?;
 
         // Another single item (compact format)
         writer.write_raw(keyspace.id, b"single2", b"v2", ValueType::Value, 2)?;
@@ -186,7 +191,7 @@ fn journal_mixed_single_and_batch() -> crate::Result<()> {
 
     // Recover and verify all 3 batches
     let journal = Journal::from_file(&path)?;
-    let reader = journal.get_reader()?;
+    let reader = must_get_reader(&journal)?;
     let batches: Vec<_> = reader.flatten().collect();
 
     assert_eq!(batches.len(), 3);
@@ -229,7 +234,7 @@ fn journal_truncation_corrupt_single_item() -> crate::Result<()> {
     // Verify initial recovery
     {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let batches: Vec<_> = reader.flatten().collect();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].items[0].key.as_ref(), b"good");
@@ -245,7 +250,7 @@ fn journal_truncation_corrupt_single_item() -> crate::Result<()> {
     // Recovery should still yield the valid single item
     for _ in 0..10 {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let batches: Vec<_> = reader.flatten().collect();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].items[0].key.as_ref(), b"good");
@@ -273,7 +278,7 @@ fn journal_single_item_checksum_mismatch() -> crate::Result<()> {
     // Verify initial recovery succeeds
     {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let batches: Vec<_> = reader.flatten().collect();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].items[0].key.as_ref(), b"good");
@@ -320,7 +325,7 @@ fn journal_single_item_checksum_mismatch() -> crate::Result<()> {
 
     // Recovery should fail due to checksum mismatch rather than silently truncating
     let journal = Journal::from_file(&path)?;
-    let reader = journal.get_reader()?;
+    let reader = must_get_reader(&journal)?;
     let batches: Vec<_> = reader.collect();
 
     // The batch reader should surface the specific checksum error
@@ -362,13 +367,13 @@ fn journal_single_item_inside_batch_discarded() -> crate::Result<()> {
             BatchItem::new(keyspace.clone(), *b"aaa", *b"bbb", ValueType::Value),
             BatchItem::new(keyspace.clone(), *b"ccc", *b"ddd", ValueType::Value),
         ];
-        writer.write_batch(batch_items.iter(), 2, 0)?;
+        writer.write_batch(&batch_items, 0)?;
     }
 
     // Verify valid batch recovers
     {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let batches: Vec<_> = reader.flatten().collect();
         assert_eq!(batches.len(), 1);
     }
@@ -400,7 +405,7 @@ fn journal_single_item_inside_batch_discarded() -> crate::Result<()> {
     // second batch (Start + misplaced SingleItem) is truncated.
     for _ in 0..3 {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let batches: Vec<_> = reader.flatten().collect();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].items[0].key.as_ref(), b"aaa");
@@ -454,7 +459,7 @@ fn journal_single_item_invalid_trailer() -> crate::Result<()> {
     // This is correct crash recovery: a corrupt trailer means the
     // entry was not fully committed to disk.
     let journal = Journal::from_file(&path)?;
-    let reader = journal.get_reader()?;
+    let reader = must_get_reader(&journal)?;
     let batches: Vec<_> = reader.flatten().collect();
 
     assert!(
@@ -496,12 +501,10 @@ fn journal_rotation() -> crate::Result<()> {
         let mut writer = journal.get_writer();
 
         writer.write_batch(
-            [
+            &[
                 BatchItem::new(keyspace.clone(), *b"a", *b"a", ValueType::Value),
                 BatchItem::new(keyspace.clone(), *b"b", *b"b", ValueType::Value),
-            ]
-            .iter(),
-            2,
+            ],
             0,
         )?;
         writer.rotate()?;
@@ -532,34 +535,28 @@ fn journal_recovery_active() -> crate::Result<()> {
         let mut writer = journal.get_writer();
 
         writer.write_batch(
-            [
+            &[
                 BatchItem::new(keyspace0.clone(), *b"a", *b"a", ValueType::Value),
                 BatchItem::new(keyspace0.clone(), *b"b", *b"b", ValueType::Value),
-            ]
-            .iter(),
-            2,
+            ],
             0,
         )?;
         writer.rotate()?;
 
         writer.write_batch(
-            [
+            &[
                 BatchItem::new(keyspace1.clone(), *b"c", *b"c", ValueType::Value),
                 BatchItem::new(keyspace1.clone(), *b"d", *b"d", ValueType::Value),
-            ]
-            .iter(),
-            2,
+            ],
             1,
         )?;
         writer.rotate()?;
 
         writer.write_batch(
-            [
+            &[
                 BatchItem::new(keyspace2.clone(), *b"c", *b"c", ValueType::Value),
                 BatchItem::new(keyspace2.clone(), *b"d", *b"d", ValueType::Value),
-            ]
-            .iter(),
-            2,
+            ],
             1,
         )?;
     }
@@ -569,7 +566,10 @@ fn journal_recovery_active() -> crate::Result<()> {
     assert!(next_next_path.try_exists()?);
 
     let journal_recovered = Journal::recover(dir2, CompressionType::None, 0)?;
-    assert_eq!(journal_recovered.active.path(), next_next_path);
+    assert_eq!(
+        journal_recovered.active.path().as_deref(),
+        Some(next_next_path.as_path())
+    );
     assert_eq!(journal_recovered.sealed, &[(0, path), (1, next_path)]);
 
     Ok(())
@@ -595,34 +595,28 @@ fn journal_recovery_active_lz4() -> crate::Result<()> {
         let mut writer = journal.get_writer();
 
         writer.write_batch(
-            [
+            &[
                 BatchItem::new(keyspace0.clone(), *b"a", *b"a", ValueType::Value),
                 BatchItem::new(keyspace0.clone(), *b"b", *b"b", ValueType::Value),
-            ]
-            .iter(),
-            2,
+            ],
             0,
         )?;
         writer.rotate()?;
 
         writer.write_batch(
-            [
+            &[
                 BatchItem::new(keyspace1.clone(), *b"c", *b"c", ValueType::Value),
                 BatchItem::new(keyspace1.clone(), *b"d", *b"d", ValueType::Value),
-            ]
-            .iter(),
-            2,
+            ],
             1,
         )?;
         writer.rotate()?;
 
         writer.write_batch(
-            [
+            &[
                 BatchItem::new(keyspace2.clone(), *b"c", *b"c", ValueType::Value),
                 BatchItem::new(keyspace2.clone(), *b"d", *b"d", ValueType::Value),
-            ]
-            .iter(),
-            2,
+            ],
             1,
         )?;
     }
@@ -632,7 +626,10 @@ fn journal_recovery_active_lz4() -> crate::Result<()> {
     assert!(next_next_path.try_exists()?);
 
     let journal_recovered = Journal::recover(dir2, CompressionType::None, 0)?;
-    assert_eq!(journal_recovered.active.path(), next_next_path);
+    assert_eq!(
+        journal_recovered.active.path().as_deref(),
+        Some(next_next_path.as_path())
+    );
     assert_eq!(journal_recovered.sealed, &[(0, path), (1, next_path)]);
 
     Ok(())
@@ -656,12 +653,10 @@ fn journal_recovery_no_active() -> crate::Result<()> {
             let mut writer = journal.get_writer();
 
             writer.write_batch(
-                [
+                &[
                     BatchItem::new(keyspace.clone(), *b"a", *b"a", ValueType::Value),
                     BatchItem::new(keyspace.clone(), *b"b", *b"b", ValueType::Value),
-                ]
-                .iter(),
-                2,
+                ],
                 0,
             )?;
             writer.rotate()?;
@@ -676,7 +671,10 @@ fn journal_recovery_no_active() -> crate::Result<()> {
     assert!(!next_path.try_exists()?);
 
     let journal_recovered = Journal::recover(dir2, CompressionType::None, 0)?;
-    assert_eq!(journal_recovered.active.path(), path);
+    assert_eq!(
+        journal_recovered.active.path().as_deref(),
+        Some(path.as_path())
+    );
     assert_eq!(journal_recovered.sealed, &[]);
 
     Ok(())
@@ -699,14 +697,12 @@ fn journal_truncation_corrupt_bytes() -> crate::Result<()> {
 
     {
         let journal = Journal::create_new(&path)?;
-        journal
-            .get_writer()
-            .write_batch(values.iter(), values.len(), 0)?;
+        journal.get_writer().write_batch(&values, 0)?;
     }
 
     {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let collected = reader.flatten().collect::<Vec<_>>();
         assert_eq!(values.to_vec(), collected.first().unwrap().items);
     }
@@ -720,7 +716,7 @@ fn journal_truncation_corrupt_bytes() -> crate::Result<()> {
 
     for _ in 0..10 {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let collected = reader.flatten().collect::<Vec<_>>();
         assert_eq!(values.to_vec(), collected.first().unwrap().items);
     }
@@ -734,7 +730,7 @@ fn journal_truncation_corrupt_bytes() -> crate::Result<()> {
 
     for _ in 0..10 {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let collected = reader.flatten().collect::<Vec<_>>();
         assert_eq!(values.to_vec(), collected.first().unwrap().items);
     }
@@ -759,14 +755,12 @@ fn journal_truncation_repeating_start_marker() -> crate::Result<()> {
 
     {
         let journal = Journal::create_new(&path)?;
-        journal
-            .get_writer()
-            .write_batch(values.iter(), values.len(), 0)?;
+        journal.get_writer().write_batch(&values, 0)?;
     }
 
     {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let collected = reader.flatten().collect::<Vec<_>>();
         assert_eq!(values.to_vec(), collected.first().unwrap().items);
     }
@@ -784,7 +778,7 @@ fn journal_truncation_repeating_start_marker() -> crate::Result<()> {
 
     for _ in 0..10 {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let collected = reader.flatten().collect::<Vec<_>>();
         assert_eq!(values.to_vec(), collected.first().unwrap().items);
     }
@@ -802,7 +796,7 @@ fn journal_truncation_repeating_start_marker() -> crate::Result<()> {
 
     for _ in 0..10 {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let collected = reader.flatten().collect::<Vec<_>>();
         assert_eq!(values.to_vec(), collected.first().unwrap().items);
     }
@@ -827,14 +821,12 @@ fn journal_truncation_repeating_end_marker() -> crate::Result<()> {
 
     {
         let journal = Journal::create_new(&path)?;
-        journal
-            .get_writer()
-            .write_batch(values.iter(), values.len(), 0)?;
+        journal.get_writer().write_batch(&values, 0)?;
     }
 
     {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let collected = reader.flatten().collect::<Vec<_>>();
         assert_eq!(values.to_vec(), collected.first().unwrap().items);
     }
@@ -848,7 +840,7 @@ fn journal_truncation_repeating_end_marker() -> crate::Result<()> {
 
     for _ in 0..10 {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let collected = reader.flatten().collect::<Vec<_>>();
         assert_eq!(values.to_vec(), collected.first().unwrap().items);
     }
@@ -862,7 +854,7 @@ fn journal_truncation_repeating_end_marker() -> crate::Result<()> {
 
     for _ in 0..10 {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let collected = reader.flatten().collect::<Vec<_>>();
         assert_eq!(values.to_vec(), collected.first().unwrap().items);
     }
@@ -887,14 +879,12 @@ fn journal_truncation_repeating_item_marker() -> crate::Result<()> {
 
     {
         let journal = Journal::create_new(&path)?;
-        journal
-            .get_writer()
-            .write_batch(values.iter(), values.len(), 0)?;
+        journal.get_writer().write_batch(&values, 0)?;
     }
 
     {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let collected = reader.flatten().collect::<Vec<_>>();
         assert_eq!(values.to_vec(), collected.first().unwrap().items);
     }
@@ -916,7 +906,7 @@ fn journal_truncation_repeating_item_marker() -> crate::Result<()> {
 
     for _ in 0..10 {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let collected = reader.flatten().collect::<Vec<_>>();
         assert_eq!(values.to_vec(), collected.first().unwrap().items);
     }
@@ -938,7 +928,7 @@ fn journal_truncation_repeating_item_marker() -> crate::Result<()> {
 
     for _ in 0..10 {
         let journal = Journal::from_file(&path)?;
-        let reader = journal.get_reader()?;
+        let reader = must_get_reader(&journal)?;
         let collected = reader.flatten().collect::<Vec<_>>();
         assert_eq!(values.to_vec(), collected.first().unwrap().items);
     }

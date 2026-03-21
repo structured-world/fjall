@@ -14,6 +14,32 @@ use std::{
 pub type CompactionFilterAssigner =
     Arc<dyn Fn(&str) -> Option<Arc<dyn lsm_tree::compaction::filter::Factory>> + Send + Sync>;
 
+/// Controls which journal (WAL) implementation the database uses.
+///
+/// The default [`File`](JournalMode::File) mode writes a crash-safe
+/// write-ahead log to disk. Use [`Noop`](JournalMode::Noop) when an
+/// external system (e.g., Raft consensus WAL) already provides
+/// durability guarantees, eliminating redundant I/O.
+#[derive(Clone, Debug, Default)]
+pub enum JournalMode {
+    /// File-based journal (default). Writes are recorded to `.jnl` files
+    /// on disk and replayed during crash recovery.
+    #[default]
+    File,
+
+    /// No-op journal. All write/persist/recovery operations are no-ops.
+    /// Use when an external WAL handles durability (e.g., Raft).
+    Noop,
+}
+
+impl JournalMode {
+    /// Returns `true` if this is the no-op journal mode.
+    #[must_use]
+    pub fn is_noop(&self) -> bool {
+        matches!(self, Self::Noop)
+    }
+}
+
 /// Global database configuration
 #[derive(Clone)]
 pub struct Config {
@@ -56,6 +82,9 @@ pub struct Config {
     /// When set, this generator is used instead of the default
     /// [`lsm_tree::SequenceNumberCounter`].
     pub(crate) seqno_generator: Option<SharedSequenceNumberGenerator>,
+
+    /// Journal mode (file-based or noop).
+    pub(crate) journal_mode: JournalMode,
 }
 
 const DEFAULT_CPU_CORES: usize = 4;
@@ -99,6 +128,7 @@ impl Config {
 
             compaction_filter_factory_assigner: None,
             seqno_generator: None,
+            journal_mode: JournalMode::default(),
         }
     }
 }

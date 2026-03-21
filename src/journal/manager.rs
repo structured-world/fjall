@@ -2,7 +2,7 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
-use super::writer::Writer;
+use super::writer::JournalWriter;
 use crate::Keyspace;
 use lsm_tree::{AbstractTree, SeqNo};
 use std::{path::PathBuf, sync::MutexGuard};
@@ -168,7 +168,7 @@ impl JournalManager {
 
     pub(crate) fn rotate_journal(
         &mut self,
-        journal_writer: &mut MutexGuard<Writer>,
+        journal_writer: &mut MutexGuard<Box<dyn JournalWriter>>,
         watermarks: Vec<EvictionWatermark>,
     ) -> crate::Result<()> {
         let journal_size = journal_writer.len()?;

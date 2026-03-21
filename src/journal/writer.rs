@@ -18,6 +18,72 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Trait for pluggable journal writer implementations.
+///
+/// The default file-based implementation ([`Writer`]) provides crash-safe,
+/// checksummed write-ahead logging to disk. Custom implementations can
+/// integrate with external WAL systems (e.g., Raft consensus) or provide
+/// specialized behavior for testing.
+///
+/// # Examples
+///
+/// A no-op journal for Raft-based systems where durability is handled
+/// by the consensus layer:
+///
+/// ```ignore
+/// use fjall::journal::NoopWriter;
+///
+/// let db = Database::builder(path)
+///     .journal_mode(JournalMode::Noop)
+///     .open()?;
+/// ```
+#[expect(clippy::missing_errors_doc)]
+pub trait JournalWriter: Send {
+    /// Writes a single key-value item using the compact `SingleItem` format.
+    fn write_raw(
+        &mut self,
+        keyspace_id: InternalKeyspaceId,
+        key: &[u8],
+        value: &[u8],
+        value_type: ValueType,
+        seqno: SeqNo,
+    ) -> crate::Result<usize>;
+
+    /// Writes a batch of items to the journal atomically.
+    fn write_batch(&mut self, items: &[BatchItem], seqno: SeqNo) -> crate::Result<usize>;
+
+    /// Writes a clear marker for a keyspace.
+    fn write_clear(
+        &mut self,
+        keyspace_id: InternalKeyspaceId,
+        seqno: SeqNo,
+    ) -> crate::Result<usize>;
+
+    /// Persists the journal to the requested durability level.
+    fn persist(&mut self, mode: PersistMode) -> std::io::Result<()>;
+
+    /// Returns the current write position in bytes.
+    fn pos(&mut self) -> crate::Result<u64>;
+
+    /// Returns the total size in bytes of the journal.
+    fn len(&self) -> crate::Result<u64>;
+
+    /// Returns `true` if the journal has zero size.
+    fn is_empty(&self) -> crate::Result<bool> {
+        Ok(self.len()? == 0)
+    }
+
+    /// Seals the current journal and creates a new one.
+    /// Returns `(sealed_path, new_path)`.
+    fn rotate(&mut self) -> crate::Result<(PathBuf, PathBuf)>;
+
+    /// Sets compression parameters for journal entries.
+    fn set_compression(&mut self, comp: CompressionType, threshold: usize);
+
+    /// Returns the path of the journal file, if applicable.
+    fn path(&self) -> Option<PathBuf>;
+}
+
 // TODO: this should be a database configuration
 pub const PRE_ALLOCATED_BYTES: u64 = 64 * 1_024 * 1_024;
 
@@ -342,13 +408,8 @@ impl Writer {
         Ok(byte_count)
     }
 
-    pub fn write_batch<'a>(
-        &mut self,
-        items: impl Iterator<Item = &'a BatchItem>,
-        batch_size: usize,
-        seqno: SeqNo,
-    ) -> crate::Result<usize> {
-        if batch_size == 0 {
+    fn write_batch_impl(&mut self, items: &[BatchItem], seqno: SeqNo) -> crate::Result<usize> {
+        if items.is_empty() {
             return Ok(0);
         }
 
@@ -358,7 +419,7 @@ impl Writer {
 
         // NOTE: entries.len() is surely never > u32::MAX
         #[expect(clippy::cast_possible_truncation)]
-        let item_count = batch_size as u32;
+        let item_count = items.len() as u32;
 
         let mut hasher = xxhash_rust::xxh3::Xxh3::default();
         let mut byte_count = 0;
@@ -395,5 +456,54 @@ impl Writer {
         byte_count += self.write_end(checksum)?;
 
         Ok(byte_count)
+    }
+}
+
+impl JournalWriter for Writer {
+    fn write_raw(
+        &mut self,
+        keyspace_id: InternalKeyspaceId,
+        key: &[u8],
+        value: &[u8],
+        value_type: ValueType,
+        seqno: SeqNo,
+    ) -> crate::Result<usize> {
+        self.write_raw(keyspace_id, key, value, value_type, seqno)
+    }
+
+    fn write_batch(&mut self, items: &[BatchItem], seqno: SeqNo) -> crate::Result<usize> {
+        self.write_batch_impl(items, seqno)
+    }
+
+    fn write_clear(
+        &mut self,
+        keyspace_id: InternalKeyspaceId,
+        seqno: SeqNo,
+    ) -> crate::Result<usize> {
+        self.write_clear(keyspace_id, seqno)
+    }
+
+    fn persist(&mut self, mode: PersistMode) -> std::io::Result<()> {
+        self.persist(mode)
+    }
+
+    fn pos(&mut self) -> crate::Result<u64> {
+        self.pos()
+    }
+
+    fn len(&self) -> crate::Result<u64> {
+        self.len()
+    }
+
+    fn rotate(&mut self) -> crate::Result<(PathBuf, PathBuf)> {
+        self.rotate()
+    }
+
+    fn set_compression(&mut self, comp: CompressionType, threshold: usize) {
+        self.set_compression(comp, threshold);
+    }
+
+    fn path(&self) -> Option<PathBuf> {
+        Some(self.path.clone())
     }
 }

@@ -14,6 +14,7 @@ use crate::{
     file::{KEYSPACES_FOLDER, LSM_CURRENT_VERSION_MARKER},
     flush::Task as FlushTask,
     ingestion::Ingestion,
+    journal::JournalWriterGuard,
     locked_file::LockedFileGuard,
     stats::Stats,
     supervisor::Supervisor,
@@ -25,7 +26,7 @@ use options::CreateOptions;
 use std::{
     ops::RangeBounds,
     path::Path,
-    sync::{atomic::AtomicBool, Arc, MutexGuard},
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 use write_delay::perform_write_stall;
@@ -731,7 +732,7 @@ impl Keyspace {
 
     pub(crate) fn inner_rotate_memtable(
         &self,
-        journal_writer: MutexGuard<'_, crate::journal::writer::Writer>,
+        journal_writer: JournalWriterGuard<'_>,
         memtable_id: lsm_tree::MemtableId,
     ) -> crate::Result<bool> {
         log::debug!("Rotating keyspace {:?}", self.name);
