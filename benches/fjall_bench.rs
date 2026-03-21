@@ -7,6 +7,10 @@ use fjall::{Database, KeyspaceCreateOptions, OptimisticTxDatabase};
 
 const BATCH_SIZE: usize = 1_000;
 
+// Each benchmark has distinct setup (Database vs OptimisticTxDatabase, different
+// keyspace counts, seeding patterns). Extracting a shared helper would require
+// generics or trait objects without reducing meaningful duplication.
+
 fn keyspace_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("keyspace_write");
 

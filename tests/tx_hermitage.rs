@@ -207,28 +207,26 @@ fn read_only_snapshot_no_conflict() -> Result {
 
 /// Two transactions both use update_fetch on the same key. The second must
 /// conflict because update_fetch marks both a read and a write on the key.
+fn increment(prev: Option<&fjall::UserValue>) -> Option<fjall::UserValue> {
+    let val = prev
+        .map(|v| u64::from_be_bytes(v.as_ref().try_into().expect("8 bytes")))
+        .unwrap_or(0);
+    Some((val + 1).to_be_bytes().into())
+}
+
 #[test]
 fn concurrent_update_fetch_conflict() -> Result {
     let env = setup()?;
 
     env.ks.insert("counter", 0u64.to_be_bytes())?;
 
-    let make_increment = || {
-        |prev: Option<&fjall::UserValue>| {
-            let val = prev
-                .map(|v| u64::from_be_bytes(v.as_ref().try_into().expect("8 bytes")))
-                .unwrap_or(0);
-            Some((val + 1).to_be_bytes().into())
-        }
-    };
-
     // T1: increment counter via update_fetch (implicitly for_update)
     let mut tx1 = env.db.write_tx()?;
-    tx1.update_fetch(env.ks.inner(), "counter", make_increment())?;
+    tx1.update_fetch(env.ks.inner(), "counter", increment)?;
 
     // T2: increment same counter via update_fetch
     let mut tx2 = env.db.write_tx()?;
-    tx2.update_fetch(env.ks.inner(), "counter", make_increment())?;
+    tx2.update_fetch(env.ks.inner(), "counter", increment)?;
 
     // T1 commits first
     tx1.commit()??;
