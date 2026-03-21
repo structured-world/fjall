@@ -139,6 +139,9 @@ impl Journal {
     }
 
     /// Returns the journal file path, if backed by a file.
+    ///
+    /// Note: `Journal` is not re-exported from `lib.rs` — this is crate-internal API.
+    /// The `Option` return handles noop journals which have no backing file.
     pub fn path(&self) -> Option<PathBuf> {
         self.get_writer().path()
     }
