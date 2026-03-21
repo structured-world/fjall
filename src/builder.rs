@@ -175,7 +175,7 @@ impl<O: Openable> Builder<O> {
     ///     .with_compaction_filter_factories(
     ///         Arc::new(|keyspace| {
     ///             // Match on the keyspace name to assign specific compaction filters
-    ///             todo!()
+    ///             None
     ///         })
     ///     )
     ///     .open()?;
