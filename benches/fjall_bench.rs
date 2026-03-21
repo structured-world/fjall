@@ -29,7 +29,7 @@ fn keyspace_write(c: &mut Criterion) {
                         (tmpdir, db, ks)
                     },
                     |(_tmpdir, _db, ks)| {
-                        for i in 0..BATCH_SIZE {
+                        for i in 0..BATCH_SIZE as u64 {
                             ks.insert(i.to_be_bytes(), &value).unwrap();
                         }
                     },
@@ -63,7 +63,7 @@ fn partition_switch(c: &mut Criterion) {
             |(_tmpdir, _db, keyspaces)| {
                 for i in 0..BATCH_SIZE {
                     let ks = &keyspaces[i % keyspaces.len()];
-                    ks.insert(i.to_be_bytes(), b"value").unwrap();
+                    ks.insert((i as u64).to_be_bytes(), b"value").unwrap();
                 }
             },
             criterion::BatchSize::PerIteration,
@@ -97,7 +97,7 @@ fn tx_commit(c: &mut Criterion) {
                     |(_tmpdir, db, ks)| {
                         for i in 0..count {
                             let mut tx = db.write_tx().unwrap();
-                            tx.insert(ks.inner(), i.to_be_bytes(), b"value");
+                            tx.insert(ks.inner(), (i as u64).to_be_bytes(), b"value");
                             tx.commit().unwrap().unwrap();
                         }
                     },
@@ -114,9 +114,8 @@ fn tx_conflict_rate(c: &mut Criterion) {
     let mut group = c.benchmark_group("tx_conflict_rate");
 
     // Measure conflict rate with overlapping transactions on a hot key.
-    // Each iteration opens two transactions that both read+write the same key,
-    // then commits them in order — the second should conflict under SSI.
-    group.throughput(Throughput::Elements(100));
+    // Each iteration runs 100 conflict-test pairs (2 transactions each = 200 commits).
+    group.throughput(Throughput::Elements(200));
 
     group.bench_function("hot_key", |b| {
         b.iter_batched(
@@ -188,7 +187,7 @@ fn recovery_time(c: &mut Criterion) {
                     let ks = db
                         .keyspace("bench", KeyspaceCreateOptions::default)
                         .unwrap();
-                    for i in 0..count {
+                    for i in 0..count as u64 {
                         ks.insert(i.to_be_bytes(), b"value_data_for_recovery")
                             .unwrap();
                     }
@@ -203,7 +202,7 @@ fn recovery_time(c: &mut Criterion) {
                         .keyspace("bench", KeyspaceCreateOptions::default)
                         .unwrap();
                     // Consume the read result to prevent dead-code elimination
-                    let value = ks.get(0usize.to_be_bytes()).unwrap();
+                    let value = ks.get(0u64.to_be_bytes()).unwrap();
                     debug_assert!(value.is_some());
                     criterion::black_box(value);
                 });
