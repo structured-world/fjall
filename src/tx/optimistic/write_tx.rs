@@ -1062,4 +1062,113 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn tx_snapshot_contains_key_no_conflict() -> Result<(), Box<dyn std::error::Error>> {
+        let env = setup()?;
+
+        env.tree.insert("a", "1")?;
+
+        let mut tx1 = env.db.write_tx()?;
+        let mut tx2 = env.db.write_tx()?;
+
+        assert!(tx1.contains_key(env.tree.inner(), "a")?);
+        tx1.insert(env.tree.inner(), "b", "2");
+
+        tx2.insert(env.tree.inner(), "a", "modified");
+        tx2.commit()??;
+
+        // snapshot contains_key should NOT conflict
+        tx1.commit()??;
+
+        Ok(())
+    }
+
+    #[test]
+    fn tx_contains_key_for_update_causes_conflict() -> Result<(), Box<dyn std::error::Error>> {
+        let env = setup()?;
+
+        env.tree.insert("a", "1")?;
+
+        let mut tx1 = env.db.write_tx()?;
+        let mut tx2 = env.db.write_tx()?;
+
+        assert!(tx1.contains_key_for_update(env.tree.inner(), "a")?);
+        tx1.insert(env.tree.inner(), "b", "2");
+
+        tx2.insert(env.tree.inner(), "a", "modified");
+        tx2.commit()??;
+
+        assert!(matches!(tx1.commit()?, Err(Conflict)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn tx_snapshot_prefix_no_conflict() -> Result<(), Box<dyn std::error::Error>> {
+        let env = setup()?;
+
+        env.tree.insert("hello1", "a")?;
+        env.tree.insert("hello2", "b")?;
+
+        let mut tx1 = env.db.write_tx()?;
+        let mut tx2 = env.db.write_tx()?;
+
+        let count = tx1.prefix(&env.tree, "hello").count();
+        assert_eq!(count, 2);
+        tx1.insert(env.tree.inner(), "other", "c");
+
+        tx2.insert(env.tree.inner(), "hello3", "new");
+        tx2.commit()??;
+
+        // snapshot prefix should NOT conflict
+        tx1.commit()??;
+
+        Ok(())
+    }
+
+    #[test]
+    fn tx_snapshot_iter_no_conflict() -> Result<(), Box<dyn std::error::Error>> {
+        let env = setup()?;
+
+        env.tree.insert("a", "1")?;
+
+        let mut tx1 = env.db.write_tx()?;
+        let mut tx2 = env.db.write_tx()?;
+
+        let count = tx1.iter(&env.tree).count();
+        assert_eq!(count, 1);
+        tx1.insert(env.tree.inner(), "b", "2");
+
+        tx2.insert(env.tree.inner(), "c", "3");
+        tx2.commit()??;
+
+        // snapshot iter should NOT conflict
+        tx1.commit()??;
+
+        Ok(())
+    }
+
+    #[test]
+    fn tx_snapshot_first_last_size_of() -> Result<(), Box<dyn std::error::Error>> {
+        let env = setup()?;
+
+        env.tree.insert("a", "hello")?;
+        env.tree.insert("z", "world")?;
+
+        let tx = env.db.write_tx()?;
+
+        let first = tx.first_key_value(env.tree.inner()).unwrap();
+        assert_eq!(b"a", &*first.key()?);
+
+        let last = tx.last_key_value(env.tree.inner()).unwrap();
+        assert_eq!(b"z", &*last.key()?);
+
+        let size = tx.size_of(env.tree.inner(), "a")?;
+        assert_eq!(Some("hello".len() as u32), size);
+
+        tx.commit()??;
+
+        Ok(())
+    }
 }
