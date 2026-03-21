@@ -8,6 +8,7 @@ rust-version = "1.90.0"
 readme = "README.md"
 include = ["src/**/*", "LICENSE-APACHE", "LICENSE-MIT", "README.md"]
 repository = "https://github.com/structured-world/fjall"
+# homepage points to upstream — docs.rs and project docs live there
 homepage = "https://github.com/fjall-rs/fjall"
 keywords = ["database", "key-value", "lsm", "rocksdb", "leveldb"]
 categories = ["data-structures", "database-implementations", "algorithms"]
@@ -28,8 +29,8 @@ byteorder = { package = "byteorder-lite", version = "0.1.0" }
 byteview = "~0.10.1"
 # Fork with V4 disk format + SequenceNumberGenerator trait (structured-world/lsm-tree#10).
 # TODO(#24): pin to tag = "v4.0.0" once lsm-tree release management is done.
-# branch=main: active development, Dependabot tracks updates.
-lsm-tree = { git = "https://github.com/structured-world/lsm-tree.git", branch = "main", default-features = false, features = [] }
+# Pinned to rev for reproducible builds until tag exists.
+lsm-tree = { git = "https://github.com/structured-world/lsm-tree.git", rev = "c03a443", default-features = false, features = [] }
 log = "0.4.27"
 tempfile = "3.20.0"
 dashmap = "6.1.0"
