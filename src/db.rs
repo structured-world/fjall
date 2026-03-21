@@ -641,6 +641,27 @@ impl Database {
         // Reload active journal (or create noop)
         let (active_journal, sealed_journals, was_active_created) = if is_noop_journal {
             log::info!("Using noop journal — recovery from external WAL");
+
+            // Warn about leftover .jnl files from a prior file-based run to prevent
+            // silent mode switches or accumulating unused disk space.
+            if let Ok(entries) = std::fs::read_dir(&config.path) {
+                for entry in entries.flatten() {
+                    if entry.file_type().is_ok_and(|ft| ft.is_file())
+                        && entry
+                            .path()
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("jnl"))
+                    {
+                        log::warn!(
+                            "Found existing journal file {:?} while opening in noop \
+                             journal mode; it will be ignored. Consider removing it \
+                             or switching to JournalMode::File.",
+                            entry.path(),
+                        );
+                    }
+                }
+            }
+
             (Arc::new(Journal::noop()), vec![], true)
         } else {
             let journal_recovery = Journal::recover(

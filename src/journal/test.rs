@@ -9,7 +9,12 @@ use test_log::test;
 
 /// Test helper: file-based journals always have a reader.
 fn must_get_reader(journal: &Journal) -> crate::Result<batch_reader::JournalBatchReader> {
-    journal.get_reader()?.ok_or(crate::Error::Unrecoverable)
+    journal
+        .get_reader()?
+        .ok_or(crate::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "expected file-based journal with a reader, got noop journal (no path)",
+        )))
 }
 
 #[test]
