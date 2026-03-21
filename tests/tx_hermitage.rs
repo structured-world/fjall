@@ -132,7 +132,9 @@ fn phantom_read_in_range_prevented() -> Result {
     tx2.insert(env.ks.inner(), "item_f", b"phantom");
     tx2.commit()??;
 
-    // T1: write something (to make it a read-write tx) and commit
+    // T1: write something (to make it a read-write tx) and commit.
+    // Fjall's conflict manager tracks the exact range from range_for_update
+    // and detects overlap with T2's insert — this always produces a conflict.
     tx1.insert(env.ks.inner(), "summary", b"count_was_3");
     let result = tx1.commit()?;
     assert!(
@@ -161,7 +163,9 @@ fn phantom_read_in_prefix_prevented() -> Result {
     tx2.insert(env.ks.inner(), "user:3", b"charlie");
     tx2.commit()??;
 
-    // T1: write and commit → must conflict
+    // T1: write and commit → must conflict.
+    // Fjall's conflict manager expands prefix_for_update into a concrete range
+    // and detects overlap with T2's insert — this always produces a conflict.
     tx1.insert(env.ks.inner(), "user_count", b"2");
     let result = tx1.commit()?;
     assert!(
