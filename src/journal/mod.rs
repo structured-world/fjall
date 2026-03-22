@@ -100,6 +100,8 @@ impl Journal {
 
     /// Returns `true` if leftover `.jnl` files were detected during open.
     #[doc(hidden)]
+    #[must_use]
+    #[expect(dead_code, reason = "used in db_test via supervisor.journal")]
     pub fn leftover_detected(&self) -> bool {
         self.leftover_detected.load(Ordering::Relaxed)
     }
