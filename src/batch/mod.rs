@@ -170,6 +170,8 @@ impl WriteBatch {
                 ValueType::Tombstone => item.keyspace.tree.remove(item.key, batch_seqno),
                 ValueType::WeakTombstone => item.keyspace.tree.remove_weak(item.key, batch_seqno),
                 ValueType::MergeOperand => {
+                    // Defense-in-depth: WriteBatch::merge doesn't validate at
+                    // enqueue time, so check here before writing to the tree.
                     if item.keyspace.config.merge_operator.is_none() {
                         return Err(crate::Error::MissingMergeOperator);
                     }

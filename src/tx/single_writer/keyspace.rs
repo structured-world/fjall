@@ -257,9 +257,9 @@ impl SingleWriterTxKeyspace {
     ///
     /// # Errors
     ///
-    /// Will return `Err` if an IO error occurs, or
+    /// Returns `Err` if the operation fails, including
     /// [`Error::MissingMergeOperator`](crate::Error::MissingMergeOperator)
-    /// if no merge operator was registered for this keyspace.
+    /// when no merge operator was registered for this keyspace.
     pub fn merge<K: Into<UserKey>, V: Into<UserValue>>(
         &self,
         key: K,

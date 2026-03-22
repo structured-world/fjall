@@ -169,7 +169,9 @@ fn merge_recovery_reinstalls_operator() -> fjall::Result<()> {
             .with_merge_operator_assigner(concat_assigner())
             .open()?;
 
-        let tree = db.keyspace("items", concat_opts)?;
+        // Reopen with default options — merge operator is restored solely
+        // via the assigner, proving the recovery path works.
+        let tree = db.keyspace("items", KeyspaceCreateOptions::default)?;
 
         let val = tree.get("key1")?.expect("should exist after recovery");
         assert_eq!(val.as_ref(), b"a,b");
