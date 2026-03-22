@@ -432,20 +432,17 @@ fn backup_under_concurrent_writes() -> fjall::Result<()> {
         let barrier_clone = barrier.clone();
 
         handles.push(std::thread::spawn(move || {
+            // Signal readiness unconditionally — avoids deadlock if the
+            // first insert fails (e.g., DB poisoned on Windows).
+            barrier_clone.wait();
+
             let mut counter = 0u64;
             while !stop_clone.load(std::sync::atomic::Ordering::Relaxed) {
                 let key = format!("t{thread_id}-{counter}");
-                // Insert may fail if DB is poisoned by concurrent flush errors
-                // (especially on Windows). Stop writing on first error.
                 if items_clone.insert(key.as_bytes(), b"concurrent").is_err() {
                     break;
                 }
                 counter += 1;
-
-                // Signal after first insert so main thread knows writes are active
-                if counter == 1 {
-                    barrier_clone.wait();
-                }
 
                 if counter > 500 {
                     break;
@@ -454,7 +451,7 @@ fn backup_under_concurrent_writes() -> fjall::Result<()> {
         }));
     }
 
-    // Wait until all writers have performed at least one insert
+    // Wait until all writer threads are spawned and ready
     barrier.wait();
 
     // Run backup while writers are active
