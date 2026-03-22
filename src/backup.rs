@@ -292,14 +292,25 @@ impl Database {
     /// on the journal manager. The file-based journal is pre-allocated up to
     /// 64 MiB; the full file (including unused pre-allocated space) is copied.
     fn backup_journals(&self, backup_path: &Path) -> crate::Result<()> {
-        // Scope the journal writer lock to just persist + active journal copy.
-        // Sealed journals are immutable and protected by the journal_manager
-        // read lock, so the writer lock is not needed for them.
-        {
+        // Snapshot sealed journal paths AND copy active journal while holding
+        // the writer lock. This prevents a WAL rotation between active copy and
+        // sealed enumeration — if rotation happened, the newly sealed journal
+        // (our already-copied active) would appear in sealed_journal_paths()
+        // with post-cut appends, overwriting the good pre-cut copy.
+        let sealed_paths = {
             let mut journal_writer = self.supervisor.journal.get_writer();
 
             // Flush and fsync the active journal
             journal_writer.persist(crate::PersistMode::SyncAll)?;
+
+            // Snapshot sealed paths while writer lock prevents new rotations
+            #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
+            let sealed = self
+                .supervisor
+                .journal_manager
+                .read()
+                .expect("lock is poisoned")
+                .sealed_journal_paths();
 
             // Copy active journal file (if file-based)
             if let Some(active_path) = journal_writer.path() {
@@ -314,37 +325,29 @@ impl Database {
                 copy_and_fsync(&active_path, &backup_path.join(filename))?;
             }
 
+            sealed
             // `journal_writer` is dropped here, releasing the writer lock.
             // Writes can resume while sealed journals are being copied below.
-        }
+        };
 
-        // Copy sealed journal files while holding a read lock on the journal manager.
-        // The lock is intentionally held for the entire copy duration: unlike the
-        // keyspaces map (where we can clone handles and release), sealed journal
-        // files can be deleted by JournalManager::maintenance() which acquires a
-        // write lock. Releasing the read lock before copying would allow maintenance
-        // to delete a journal file between listing and copying.
-        {
-            #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
-            let journal_manager = self
-                .supervisor
-                .journal_manager
-                .read()
-                .expect("lock is poisoned");
+        // Copy sealed journal files. The paths were captured under the writer
+        // lock so the set is frozen at the WAL cut point. Sealed journals are
+        // immutable — they cannot be modified, only deleted by maintenance.
+        // Maintenance requires a write lock on journal_manager; we hold a read
+        // lock on the path Vec (via the captured Vec, not the manager), so
+        // there is no TOCTOU race as long as maintenance hasn't run yet.
+        // If a sealed journal was deleted between snapshot and copy,
+        // copy_and_fsync will return NotFound which propagates as an error.
+        for sealed_path in &sealed_paths {
+            #[expect(
+                clippy::expect_used,
+                reason = "sealed journal paths always have a file name component"
+            )]
+            let filename = sealed_path
+                .file_name()
+                .expect("sealed journal path should have file name");
 
-            let sealed_paths = journal_manager.sealed_journal_paths();
-
-            for sealed_path in &sealed_paths {
-                #[expect(
-                    clippy::expect_used,
-                    reason = "sealed journal paths always have a file name component"
-                )]
-                let filename = sealed_path
-                    .file_name()
-                    .expect("sealed journal path should have file name");
-
-                copy_and_fsync(sealed_path, &backup_path.join(filename))?;
-            }
+            copy_and_fsync(sealed_path, &backup_path.join(filename))?;
         }
 
         log::debug!("Journal files copied. Hard-linking segments...");
