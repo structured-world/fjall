@@ -145,7 +145,7 @@ pub use {
     batch::WriteBatch as OwnedWriteBatch,
     builder::Builder as DatabaseBuilder,
     db::Database,
-    db_config::Config,
+    db_config::{Config, JournalMode},
     error::{Error, Result},
     guard::Guard,
     iter::Iter,

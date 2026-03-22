@@ -2,7 +2,11 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
-use crate::{db_config::CompactionFilterAssigner, tx::single_writer::Openable, Config};
+use crate::{
+    db_config::{CompactionFilterAssigner, JournalMode},
+    tx::single_writer::Openable,
+    Config,
+};
 use lsm_tree::{Cache, CompressionType, DescriptorTable, SharedSequenceNumberGenerator};
 use std::{marker::PhantomData, path::Path, sync::Arc};
 
@@ -223,6 +227,30 @@ impl<O: Openable> Builder<O> {
     #[must_use]
     pub fn seqno_generator(mut self, generator: SharedSequenceNumberGenerator) -> Self {
         self.inner.seqno_generator = Some(generator);
+        self
+    }
+
+    /// Sets the journal mode.
+    ///
+    /// Use [`JournalMode::Noop`] when an external system (e.g., Raft WAL)
+    /// handles durability, eliminating redundant journal I/O.
+    ///
+    /// Default = [`JournalMode::File`]
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fjall::{Database, JournalMode};
+    ///
+    /// # let folder = tempfile::tempdir()?;
+    /// let db = Database::builder(&folder)
+    ///     .journal_mode(JournalMode::Noop)
+    ///     .open()?;
+    /// # Ok::<(), fjall::Error>(())
+    /// ```
+    #[must_use]
+    pub fn journal_mode(mut self, mode: JournalMode) -> Self {
+        self.inner.journal_mode = mode;
         self
     }
 }

@@ -622,6 +622,55 @@ impl Database {
         Ok(())
     }
 
+    /// Best-effort scan for leftover `.jnl` files when opening in noop mode.
+    ///
+    /// Logs warnings for each found file and sets `journal.leftover_detected()`.
+    /// Never fails — I/O errors are logged and skipped so that database open
+    /// is not blocked by filesystem issues in a non-critical scan.
+    fn warn_leftover_journals(db_path: &Path, journal: &Journal) {
+        match std::fs::read_dir(db_path) {
+            Err(e) => {
+                log::warn!(
+                    "Failed to scan {} for leftover journal files \
+                     while opening in noop journal mode: {e}",
+                    db_path.display(),
+                );
+            }
+            Ok(entries) => {
+                for entry_result in entries {
+                    let entry = match entry_result {
+                        Ok(e) => e,
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to read directory entry in {} while scanning \
+                                 for leftover journal files: {e}",
+                                db_path.display(),
+                            );
+                            continue;
+                        }
+                    };
+
+                    // file_type() errors are silently skipped: this scan is
+                    // best-effort and must not block database open.
+                    if entry.file_type().is_ok_and(|ft| ft.is_file())
+                        && entry
+                            .path()
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("jnl"))
+                    {
+                        log::warn!(
+                            "Found existing journal file {} while opening in noop \
+                             journal mode; it will be ignored. Consider removing it \
+                             or switching to JournalMode::File.",
+                            entry.path().display(),
+                        );
+                        journal.set_leftover_detected();
+                    }
+                }
+            }
+        }
+    }
+
     /// Recovers existing database from directory.
     #[expect(clippy::too_many_lines)]
     #[doc(hidden)]
@@ -636,18 +685,37 @@ impl Database {
         // TODO:
         // let recovery_mode = config.journal_recovery_mode;
 
-        // Reload active journal
-        let journal_recovery = Journal::recover(
-            &config.path,
-            config.journal_compression_type,
-            config.journal_compression_threshold,
-        )?;
-        log::debug!("journal recovery result: {journal_recovery:#?}");
+        let is_noop_journal = config.journal_mode.is_noop();
 
-        let active_journal = Arc::new(journal_recovery.active);
-        active_journal.get_writer().persist(PersistMode::SyncAll)?;
+        // Reload active journal (or create noop)
+        let (active_journal, sealed_journals, was_active_created) = if is_noop_journal {
+            log::info!("Using noop journal — recovery from external WAL");
 
-        let sealed_journals = journal_recovery.sealed;
+            let journal = Journal::noop();
+            Self::warn_leftover_journals(&config.path, &journal);
+
+            // Noop journal reports disk_space=0 and count=1 (the active noop).
+            // Leftover .jnl files from a prior file-based run are NOT counted —
+            // they belong to the old journal mode and the warning asks the user
+            // to clean them up or switch back to JournalMode::File.
+            (Arc::new(journal), vec![], true)
+        } else {
+            let journal_recovery = Journal::recover(
+                &config.path,
+                config.journal_compression_type,
+                config.journal_compression_threshold,
+            )?;
+            log::debug!("journal recovery result: {journal_recovery:#?}");
+
+            let active = Arc::new(journal_recovery.active);
+            active.get_writer().persist(PersistMode::SyncAll)?;
+
+            (
+                active,
+                journal_recovery.sealed,
+                journal_recovery.was_active_created,
+            )
+        };
 
         let journal_manager = JournalManager::new();
 
@@ -747,77 +815,81 @@ impl Database {
             }
 
             // NOTE: We only need to recover the active journal, if it actually existed before
-            // nothing to recover, if we just created it
-            if !journal_recovery.was_active_created {
+            // nothing to recover, if we just created it (or if using noop journal)
+            if !was_active_created {
                 log::trace!("Recovering active memtables from active journal");
 
-                let reader = db.supervisor.journal.get_reader()?;
+                if let Some(reader) = db.supervisor.journal.get_reader()? {
+                    for batch in reader {
+                        let batch = batch?;
 
-                for batch in reader {
-                    let batch = batch?;
+                        for item in batch.items {
+                            let Some(keyspace_name) =
+                                db.meta_keyspace.resolve_id(item.keyspace_id)?
+                            else {
+                                continue;
+                            };
 
-                    for item in batch.items {
-                        let Some(keyspace_name) = db.meta_keyspace.resolve_id(item.keyspace_id)?
-                        else {
-                            continue;
-                        };
+                            let Some(keyspace) = keyspaces.get(&keyspace_name) else {
+                                continue;
+                            };
 
-                        let Some(keyspace) = keyspaces.get(&keyspace_name) else {
-                            continue;
-                        };
+                            let tree = &keyspace.tree;
 
-                        let tree = &keyspace.tree;
-
-                        match item.value_type {
-                            lsm_tree::ValueType::Value => {
-                                tree.insert(item.key, item.value, batch.seqno);
+                            match item.value_type {
+                                lsm_tree::ValueType::Value => {
+                                    tree.insert(item.key, item.value, batch.seqno);
+                                }
+                                lsm_tree::ValueType::Tombstone => {
+                                    tree.remove(item.key, batch.seqno);
+                                }
+                                lsm_tree::ValueType::WeakTombstone => {
+                                    tree.remove_weak(item.key, batch.seqno);
+                                }
+                                lsm_tree::ValueType::Indirection => {
+                                    unreachable!()
+                                }
                             }
-                            lsm_tree::ValueType::Tombstone => {
-                                tree.remove(item.key, batch.seqno);
-                            }
-                            lsm_tree::ValueType::WeakTombstone => {
-                                tree.remove_weak(item.key, batch.seqno);
-                            }
-                            lsm_tree::ValueType::Indirection => {
-                                unreachable!()
-                            }
+                        }
+
+                        for keyspace_id in &batch.cleared_keyspaces {
+                            let Some(keyspace_name) = db.meta_keyspace.resolve_id(*keyspace_id)?
+                            else {
+                                continue;
+                            };
+
+                            let Some(keyspace) = keyspaces.get(&keyspace_name) else {
+                                continue;
+                            };
+
+                            keyspace.tree.clear().ok();
                         }
                     }
 
-                    for keyspace_id in &batch.cleared_keyspaces {
-                        let Some(keyspace_name) = db.meta_keyspace.resolve_id(*keyspace_id)? else {
-                            continue;
-                        };
+                    for keyspace in keyspaces.values() {
+                        let size = keyspace.tree.active_memtable().size();
 
-                        let Some(keyspace) = keyspaces.get(&keyspace_name) else {
-                            continue;
-                        };
+                        log::trace!(
+                            "Recovered active memtable of size {size}B for keyspace {:?} ({} items)",
+                            keyspace.name,
+                            keyspace.tree.active_memtable().len(),
+                        );
 
-                        keyspace.tree.clear().ok();
+                        // IMPORTANT: Add active memtable size to current write buffer size
+                        db.supervisor.write_buffer_size.allocate(size);
+
+                        // Recover seqno
+                        let maybe_next_seqno = keyspace
+                            .tree
+                            .get_highest_seqno()
+                            .map(|x| x + 1)
+                            .unwrap_or_default();
+
+                        db.supervisor.seqno.fetch_max(maybe_next_seqno);
+                        log::debug!("Database seqno is now {}", db.supervisor.seqno.get());
                     }
-                }
-
-                for keyspace in keyspaces.values() {
-                    let size = keyspace.tree.active_memtable().size();
-
-                    log::trace!(
-                        "Recovered active memtable of size {size}B for keyspace {:?} ({} items)",
-                        keyspace.name,
-                        keyspace.tree.active_memtable().len(),
-                    );
-
-                    // IMPORTANT: Add active memtable size to current write buffer size
-                    db.supervisor.write_buffer_size.allocate(size);
-
-                    // Recover seqno
-                    let maybe_next_seqno = keyspace
-                        .tree
-                        .get_highest_seqno()
-                        .map(|x| x + 1)
-                        .unwrap_or_default();
-
-                    db.supervisor.seqno.fetch_max(maybe_next_seqno);
-                    log::debug!("Database seqno is now {}", db.supervisor.seqno.get());
+                } else {
+                    log::trace!("No journal reader (noop journal), skipping journal recovery");
                 }
             }
         }
@@ -880,12 +952,16 @@ impl Database {
 
         std::fs::create_dir_all(&keyspaces_folder_path)?;
 
-        let active_journal_path = journal_folder_path.join("0.jnl");
-        let journal = Journal::create_new(&active_journal_path)?.with_compression(
-            config.journal_compression_type,
-            config.journal_compression_threshold,
-        );
-        let journal = Arc::new(journal);
+        let journal = if config.journal_mode.is_noop() {
+            log::info!("Using noop journal — durability handled externally");
+            Arc::new(Journal::noop())
+        } else {
+            let active_journal_path = journal_folder_path.join("0.jnl");
+            Arc::new(Journal::create_new(&active_journal_path)?.with_compression(
+                config.journal_compression_type,
+                config.journal_compression_threshold,
+            ))
+        };
 
         // NOTE: Lastly, fsync version marker, which contains the version
         let mut marker = std::fs::File::create_new(config.path.join(VERSION_MARKER))?;

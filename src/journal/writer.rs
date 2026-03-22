@@ -18,6 +18,106 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Trait for pluggable journal writer implementations.
+///
+/// The default file-based implementation ([`Writer`]) provides crash-safe,
+/// checksummed write-ahead logging to disk. Custom implementations can
+/// integrate with external WAL systems (e.g., Raft consensus) or provide
+/// specialized behavior for testing.
+///
+/// # Examples
+///
+/// A no-op journal for Raft-based systems where durability is handled
+/// by the consensus layer:
+///
+/// ```no_run
+/// use fjall::{Database, JournalMode};
+///
+/// let db = Database::builder("path/to/db")
+///     .journal_mode(JournalMode::Noop)
+///     .open()
+///     .unwrap();
+/// ```
+pub trait JournalWriter: Send {
+    /// Writes a single key-value item using the compact `SingleItem` format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying I/O operation fails.
+    fn write_raw(
+        &mut self,
+        keyspace_id: InternalKeyspaceId,
+        key: &[u8],
+        value: &[u8],
+        value_type: ValueType,
+        seqno: SeqNo,
+    ) -> crate::Result<usize>;
+
+    /// Writes a batch of items to the journal atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying I/O operation fails.
+    fn write_batch(&mut self, items: &[BatchItem], seqno: SeqNo) -> crate::Result<usize>;
+
+    /// Writes a clear marker for a keyspace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying I/O operation fails.
+    fn write_clear(
+        &mut self,
+        keyspace_id: InternalKeyspaceId,
+        seqno: SeqNo,
+    ) -> crate::Result<usize>;
+
+    /// Persists the journal to the requested durability level.
+    ///
+    /// Uses `std::io::Result` to match the existing `Writer::persist` signature,
+    /// which callers convert via `Into<crate::Error>` at the call site.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if fsync/flush fails.
+    fn persist(&mut self, mode: PersistMode) -> std::io::Result<()>;
+
+    /// Returns the current write position in bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying I/O operation fails.
+    fn pos(&mut self) -> crate::Result<u64>;
+
+    /// Returns the total size in bytes of the journal.
+    ///
+    /// For file-based journals this is the file size (which may include
+    /// pre-allocated space), not the number of written entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying I/O operation fails.
+    fn len(&self) -> crate::Result<u64>;
+
+    /// Seals the current journal and creates a new one.
+    /// Returns `(sealed_path, new_path)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying I/O operation fails.
+    fn rotate(&mut self) -> crate::Result<(PathBuf, PathBuf)>;
+
+    /// Sets compression parameters for journal entries.
+    fn set_compression(&mut self, comp: CompressionType, threshold: usize);
+
+    /// Returns the path of the journal file, if applicable.
+    ///
+    /// Returns owned `PathBuf` because callers access it through
+    /// `MutexGuard<Box<dyn JournalWriter>>` — the guard is dropped
+    /// before any returned borrow could be used. Called infrequently
+    /// (recovery + debug), not on the write hot path.
+    fn path(&self) -> Option<PathBuf>;
+}
+
 // TODO: this should be a database configuration
 pub const PRE_ALLOCATED_BYTES: u64 = 64 * 1_024 * 1_024;
 
@@ -342,13 +442,8 @@ impl Writer {
         Ok(byte_count)
     }
 
-    pub fn write_batch<'a>(
-        &mut self,
-        items: impl Iterator<Item = &'a BatchItem>,
-        batch_size: usize,
-        seqno: SeqNo,
-    ) -> crate::Result<usize> {
-        if batch_size == 0 {
+    fn write_batch_impl(&mut self, items: &[BatchItem], seqno: SeqNo) -> crate::Result<usize> {
+        if items.is_empty() {
             return Ok(0);
         }
 
@@ -356,9 +451,11 @@ impl Writer {
 
         self.buf.clear();
 
-        // NOTE: entries.len() is surely never > u32::MAX
-        #[expect(clippy::cast_possible_truncation)]
-        let item_count = batch_size as u32;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "batch size limited by memory; exceeding u32::MAX items is unreachable"
+        )]
+        let item_count = items.len() as u32;
 
         let mut hasher = xxhash_rust::xxh3::Xxh3::default();
         let mut byte_count = 0;
@@ -395,5 +492,54 @@ impl Writer {
         byte_count += self.write_end(checksum)?;
 
         Ok(byte_count)
+    }
+}
+
+impl JournalWriter for Writer {
+    fn write_raw(
+        &mut self,
+        keyspace_id: InternalKeyspaceId,
+        key: &[u8],
+        value: &[u8],
+        value_type: ValueType,
+        seqno: SeqNo,
+    ) -> crate::Result<usize> {
+        Self::write_raw(self, keyspace_id, key, value, value_type, seqno)
+    }
+
+    fn write_batch(&mut self, items: &[BatchItem], seqno: SeqNo) -> crate::Result<usize> {
+        Self::write_batch_impl(self, items, seqno)
+    }
+
+    fn write_clear(
+        &mut self,
+        keyspace_id: InternalKeyspaceId,
+        seqno: SeqNo,
+    ) -> crate::Result<usize> {
+        Self::write_clear(self, keyspace_id, seqno)
+    }
+
+    fn persist(&mut self, mode: PersistMode) -> std::io::Result<()> {
+        Self::persist(self, mode)
+    }
+
+    fn pos(&mut self) -> crate::Result<u64> {
+        Self::pos(self)
+    }
+
+    fn len(&self) -> crate::Result<u64> {
+        Self::len(self)
+    }
+
+    fn rotate(&mut self) -> crate::Result<(PathBuf, PathBuf)> {
+        Self::rotate(self)
+    }
+
+    fn set_compression(&mut self, comp: CompressionType, threshold: usize) {
+        Self::set_compression(self, comp, threshold);
+    }
+
+    fn path(&self) -> Option<PathBuf> {
+        Some(self.path.clone())
     }
 }

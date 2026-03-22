@@ -242,3 +242,121 @@ fn recover_sealed_pair_1() -> crate::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn noop_journal_create_and_write() -> crate::Result<()> {
+    use crate::{Database, JournalMode, KeyspaceCreateOptions};
+
+    let folder = tempfile::tempdir()?;
+
+    {
+        let db = Database::builder(&folder)
+            .journal_mode(JournalMode::Noop)
+            .open()?;
+
+        let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+
+        // Writes succeed without journal I/O
+        tree.insert("a", "hello")?;
+        tree.insert("b", "world")?;
+
+        // Data is readable within the session
+        assert_eq!(tree.get("a")?.as_deref(), Some(b"hello".as_slice()));
+        assert_eq!(tree.get("b")?.as_deref(), Some(b"world".as_slice()));
+        assert_eq!(tree.len()?, 2);
+
+        // No .jnl files created (scan recursively to cover nested dirs)
+        fn count_jnl_files(dir: &std::path::Path) -> std::io::Result<usize> {
+            let mut count = 0;
+            for entry in std::fs::read_dir(dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    count += count_jnl_files(&path)?;
+                } else if path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jnl"))
+                {
+                    count += 1;
+                }
+            }
+            Ok(count)
+        }
+        assert_eq!(
+            count_jnl_files(folder.path())?,
+            0,
+            "noop journal should not create .jnl files"
+        );
+
+        // get_reader returns None for noop journal
+        assert!(db.supervisor.journal.get_reader()?.is_none());
+
+        // journal_count still works (reports sealed journals only + 1)
+        assert_eq!(db.journal_count(), 1);
+
+        // journal_disk_space reports 0
+        assert_eq!(db.journal_disk_space()?, 0);
+
+        // No leftover .jnl from fresh noop open
+        assert!(!db.supervisor.journal.leftover_detected());
+    }
+
+    // Re-open with noop — recovery succeeds (no journal to replay)
+    {
+        let db = Database::builder(&folder)
+            .journal_mode(JournalMode::Noop)
+            .open()?;
+
+        // Recreate keyspace; data durability with noop journal is unspecified
+        // here (it may or may not survive depending on flush behavior).
+        let _tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+
+        // WAL-specific invariants: still no journal to read or disk space used.
+        assert!(db.supervisor.journal.get_reader()?.is_none());
+        assert_eq!(db.journal_disk_space()?, 0);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn noop_journal_mode_switch_detects_leftover_jnl() -> crate::Result<()> {
+    use crate::{Database, JournalMode, KeyspaceCreateOptions};
+
+    let folder = tempfile::tempdir()?;
+
+    // First: create DB with file-based journal (creates .jnl files)
+    {
+        let db = Database::builder(&folder).open()?;
+        let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+        tree.insert("x", "y")?;
+    }
+
+    // Verify .jnl file exists
+    let has_jnl = std::fs::read_dir(folder.path())?.flatten().any(|e| {
+        e.path()
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("jnl"))
+    });
+    assert!(has_jnl, "file-based journal should have created .jnl");
+
+    // Re-open with noop mode — should warn about leftover .jnl but succeed
+    {
+        let db = Database::builder(&folder)
+            .journal_mode(JournalMode::Noop)
+            .open()?;
+
+        // DB opens successfully despite leftover .jnl files
+        let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+        tree.insert("a", "b")?;
+        assert!(db.supervisor.journal.get_reader()?.is_none());
+
+        // Verify leftover .jnl detection actually ran
+        assert!(
+            db.supervisor.journal.leftover_detected(),
+            "noop open should detect leftover .jnl files from prior file-based run"
+        );
+    }
+
+    Ok(())
+}

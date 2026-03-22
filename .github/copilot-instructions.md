@@ -36,6 +36,7 @@ This is a **maintained fork** of [fjall-rs/fjall](https://github.com/fjall-rs/fj
 - **Casts:** Prefer `TryFrom`/`TryInto`. `as` casts need `#[expect(clippy::cast_possible_truncation)]` with reason.
 - **Feature gates:** Code behind `#[cfg(feature = "...")]` must compile with any feature combination.
 - **Definite initialization:** `let x: T;` without a default value is valid Rust — the compiler tracks initialization per control-flow path and does not drop uninitialized bindings; do not flag this as a bug when the variable is only used in paths that initialize it.
+- **String `\` continuation:** In Rust, a `\` at the end of a string literal line consumes the newline **and all leading whitespace** on the next line. The result has no extra spaces. Do not flag `\` continuation as injecting whitespace — it is standard Rust behavior (see [Reference: String continuation](https://doc.rust-lang.org/reference/tokens.html#string-literals)).
 
 ## Testing Standards
 
