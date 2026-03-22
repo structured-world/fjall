@@ -343,6 +343,7 @@ pub struct PendingWatermark {
 
 struct WatermarkInner {
     pending: BTreeSet<SeqNo>,
+    max_registered: SeqNo,
 }
 
 impl PendingWatermark {
@@ -350,6 +351,7 @@ impl PendingWatermark {
         Self {
             inner: Mutex::new(WatermarkInner {
                 pending: BTreeSet::new(),
+                max_registered: 0,
             }),
             snapshot_tracker,
         }
@@ -364,6 +366,7 @@ impl PendingWatermark {
         let mut inner = self.inner.lock().expect("watermark lock poisoned");
         for &seqno in seqnos {
             inner.pending.insert(seqno);
+            inner.max_registered = inner.max_registered.max(seqno);
         }
     }
 
@@ -375,7 +378,7 @@ impl PendingWatermark {
         inner.pending.remove(&seqno);
 
         // The safe watermark is one below the lowest still-pending seqno.
-        // If nothing is pending, all writes up to this seqno are applied.
+        // If nothing is pending, all registered writes are applied.
         let safe_seqno = match inner.pending.iter().next() {
             Some(&min_pending) => {
                 if min_pending == 0 {
@@ -383,7 +386,7 @@ impl PendingWatermark {
                 }
                 min_pending - 1
             }
-            None => seqno,
+            None => inner.max_registered,
         };
 
         drop(inner);
@@ -540,5 +543,122 @@ mod tests {
 
         assert!(result.is_err());
         Ok(())
+    }
+
+    #[test]
+    fn batch_op_roundtrip() -> crate::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let journal_path = dir.path().join("0.jnl");
+        let journal = Arc::new(Journal::create_new(&journal_path)?);
+        let seqno: SharedSequenceNumberGenerator = make_seqno();
+        let is_poisoned = AtomicBool::new(false);
+        let wg = WriteGroup::new();
+        let wm = make_watermark(&seqno);
+
+        let db_dir = tempfile::tempdir()?;
+        let db = crate::Database::builder(db_dir.path()).open()?;
+        let ks = db.keyspace("test", Default::default)?;
+
+        let items = vec![
+            crate::batch::item::Item::new(
+                ks.clone(),
+                UserKey::from(b"k1".to_vec()),
+                UserValue::from(b"v1".to_vec()),
+                ValueType::Value,
+            ),
+            crate::batch::item::Item::new(
+                ks,
+                UserKey::from(b"k2".to_vec()),
+                UserValue::from(b"v2".to_vec()),
+                ValueType::Value,
+            ),
+        ];
+
+        let (seq, op) = wg.submit(
+            WriteOp::Batch { items },
+            Some(PersistMode::Buffer),
+            &journal,
+            &seqno,
+            &is_poisoned,
+            &wm,
+        )?;
+
+        assert_eq!(seq, 0);
+        match op {
+            WriteOp::Batch { items } => assert_eq!(items.len(), 2),
+            _ => panic!("expected Batch op"),
+        }
+        wm.applied(seq);
+        Ok(())
+    }
+
+    #[test]
+    fn clear_op_roundtrip() -> crate::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let journal_path = dir.path().join("0.jnl");
+        let journal = Arc::new(Journal::create_new(&journal_path)?);
+        let seqno: SharedSequenceNumberGenerator = make_seqno();
+        let is_poisoned = AtomicBool::new(false);
+        let wg = WriteGroup::new();
+        let wm = make_watermark(&seqno);
+
+        let (seq, op) = wg.submit(
+            WriteOp::Clear { keyspace_id: 42 },
+            Some(PersistMode::Buffer),
+            &journal,
+            &seqno,
+            &is_poisoned,
+            &wm,
+        )?;
+
+        assert_eq!(seq, 0);
+        match op {
+            WriteOp::Clear { keyspace_id } => assert_eq!(keyspace_id, 42),
+            _ => panic!("expected Clear op"),
+        }
+        wm.applied(seq);
+        Ok(())
+    }
+
+    #[test]
+    fn watermark_advances_only_through_consecutive_seqnos() {
+        let visible = make_seqno();
+        let wm = PendingWatermark::new(SnapshotTracker::new(Arc::clone(&visible)));
+
+        // Register seqnos 0, 1, 2 as pending
+        wm.register(&[0, 1, 2]);
+
+        // Apply out of order: seqno 2 first
+        wm.applied(2);
+        // Watermark should NOT advance past 0 (still pending)
+        assert_eq!(visible.get(), 0);
+
+        // Apply seqno 0
+        wm.applied(0);
+        // Now 0 is done, but 1 is still pending → watermark = 0
+        assert_eq!(visible.get(), 1); // publish(0) → fetch_max(0+1) = 1
+
+        // Apply seqno 1 — all done
+        wm.applied(1);
+        // Now all applied, watermark = max(2+1) = 3
+        assert_eq!(visible.get(), 3); // publish(2) → fetch_max(2+1) = 3
+    }
+
+    #[test]
+    fn watermark_seqno_zero_pending_blocks_advance() {
+        let visible = make_seqno();
+        let wm = PendingWatermark::new(SnapshotTracker::new(Arc::clone(&visible)));
+
+        wm.register(&[0, 1]);
+
+        // Apply seqno 1 first — seqno 0 still pending
+        wm.applied(1);
+        // Watermark must not advance while seqno 0 is pending
+        assert_eq!(visible.get(), 0);
+
+        // Now apply seqno 0
+        wm.applied(0);
+        // Both done, watermark advances
+        assert_eq!(visible.get(), 2); // publish(1) → fetch_max(1+1) = 2
     }
 }
