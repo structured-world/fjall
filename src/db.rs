@@ -857,6 +857,12 @@ impl Database {
                                     tree.remove_weak(item.key, batch.seqno);
                                 }
                                 lsm_tree::ValueType::MergeOperand => {
+                                    assert!(
+                                        keyspace.config.merge_operator.is_some(),
+                                        "WAL replay encountered MergeOperand for keyspace `{keyspace_name}` \
+                                         but no merge operator is configured; install one via \
+                                         Builder::with_merge_operator_assigner()",
+                                    );
                                     tree.merge(item.key, item.value, batch.seqno);
                                 }
                                 lsm_tree::ValueType::Indirection => {

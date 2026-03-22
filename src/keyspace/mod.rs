@@ -979,10 +979,7 @@ impl Keyspace {
         use std::sync::atomic::Ordering;
 
         if self.config.merge_operator.is_none() {
-            return Err(crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "merge() called on keyspace without a merge operator",
-            )));
+            return Err(crate::Error::MissingMergeOperator);
         }
 
         if self.is_deleted.load(Ordering::Relaxed) {

@@ -40,6 +40,9 @@ pub enum Error {
     /// More info: <https://www.usenix.org/system/files/atc20-rebello.pdf>
     Poisoned,
 
+    /// Merge operation attempted on a keyspace without a merge operator
+    MissingMergeOperator,
+
     /// Keyspace is deleted
     KeyspaceDeleted,
 

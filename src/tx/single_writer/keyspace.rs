@@ -265,13 +265,10 @@ impl SingleWriterTxKeyspace {
         operand: V,
     ) -> crate::Result<()> {
         if self.inner().config.merge_operator.is_none() {
-            return Err(crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "merge() called on keyspace without a merge operator",
-            )));
+            return Err(crate::Error::MissingMergeOperator);
         }
         let mut tx = self.db.write_tx();
-        tx.merge(self, key, operand);
+        tx.merge(self, key, operand)?;
         tx.commit()?;
         Ok(())
     }

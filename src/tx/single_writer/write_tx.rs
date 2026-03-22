@@ -287,13 +287,17 @@ impl<'tx> WriteTransaction<'tx> {
     ///
     /// The operand is lazily combined with the existing value during reads
     /// and compaction, using the merge operator registered on the keyspace.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MissingMergeOperator` if no merge operator is configured.
     pub fn merge<K: Into<UserKey>, V: Into<UserValue>>(
         &mut self,
         keyspace: &SingleWriterTxKeyspace,
         key: K,
         operand: V,
-    ) {
-        self.inner.merge(keyspace.inner(), key, operand);
+    ) -> crate::Result<()> {
+        self.inner.merge(keyspace.inner(), key, operand)
     }
 
     /// Removes an item from the keyspace.
