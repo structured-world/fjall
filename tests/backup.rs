@@ -98,7 +98,12 @@ fn backup_destination_already_exists() -> fjall::Result<()> {
     let db = Database::builder(&folder).open()?;
     let result = db.backup_to(&backup_path);
 
-    assert!(result.is_err());
+    let err = result.expect_err("backup_to should fail when destination directory already exists");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("AlreadyExists") || msg.contains("already exists"),
+        "unexpected backup_to error when destination already exists: {msg}",
+    );
 
     Ok(())
 }

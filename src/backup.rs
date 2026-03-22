@@ -153,17 +153,26 @@ impl Database {
     ///
     /// The backup is crash-safe and can be opened as a regular database.
     /// Writes continue during backup — only the journal is briefly locked
-    /// while its files are copied.
+    /// while the active journal file is copied.
     ///
     /// LSM segment files (SSTs, blobs) are immutable and are hard-linked into
     /// the backup directory for O(1) per-file cost. If hard-linking fails
     /// (e.g., cross-device), files are copied instead.
+    ///
+    /// # Noop journal mode
+    ///
+    /// When using [`JournalMode::Noop`](crate::JournalMode::Noop), no journal
+    /// files are copied. The external WAL system (e.g., Raft) is responsible
+    /// for its own backup of unflushed data.
     ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - The destination path already exists
     /// - An I/O error occurs during the backup
+    ///
+    /// On error, the partially-created backup directory is not cleaned up;
+    /// the caller should remove it if needed.
     ///
     /// # Examples
     ///
@@ -204,7 +213,12 @@ impl Database {
         }
 
         match std::fs::create_dir(path) {
-            Ok(()) => {}
+            Ok(()) => {
+                // Ensure the directory entry is durable by fsyncing the parent.
+                if let Some(parent) = path.parent() {
+                    fsync_directory(parent)?;
+                }
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 return Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::AlreadyExists,
@@ -264,36 +278,45 @@ impl Database {
 
     /// Copies all journal files (active + sealed) into the backup directory.
     ///
-    /// Holds the journal writer lock for the duration — this is the write-pause
-    /// window. The file-based journal is pre-allocated up to 64 MiB; the full
-    /// file (including unused pre-allocated space) is copied.
+    /// Holds the journal writer lock only while persisting and copying the
+    /// active journal; sealed journals are copied while holding a read lock
+    /// on the journal manager. The file-based journal is pre-allocated up to
+    /// 64 MiB; the full file (including unused pre-allocated space) is copied.
     fn backup_journals(&self, backup_path: &Path) -> crate::Result<()> {
-        let mut journal_writer = self.supervisor.journal.get_writer();
+        // Scope the journal writer lock to just persist + active journal copy.
+        // Sealed journals are immutable and protected by the journal_manager
+        // read lock, so the writer lock is not needed for them.
+        {
+            let mut journal_writer = self.supervisor.journal.get_writer();
 
-        // Flush and fsync the active journal
-        journal_writer
-            .persist(crate::PersistMode::SyncAll)
-            .map_err(|e| {
-                log::error!("Failed to persist journal during backup: {e:?}");
-                e
-            })?;
+            // Flush and fsync the active journal
+            journal_writer
+                .persist(crate::PersistMode::SyncAll)
+                .map_err(|e| {
+                    log::error!("Failed to persist journal during backup: {e:?}");
+                    e
+                })?;
 
-        // Copy active journal file (if file-based)
-        if let Some(active_path) = journal_writer.path() {
-            #[expect(
-                clippy::expect_used,
-                reason = "journal file paths always have a file name component"
-            )]
-            let filename = active_path
-                .file_name()
-                .expect("journal path should have file name");
+            // Copy active journal file (if file-based)
+            if let Some(active_path) = journal_writer.path() {
+                #[expect(
+                    clippy::expect_used,
+                    reason = "journal file paths always have a file name component"
+                )]
+                let filename = active_path
+                    .file_name()
+                    .expect("journal path should have file name");
 
-            copy_and_fsync(&active_path, &backup_path.join(filename)).inspect_err(|e| {
-                log::error!(
-                    "Failed to copy active journal {} during backup: {e:?}",
-                    active_path.display(),
-                );
-            })?;
+                copy_and_fsync(&active_path, &backup_path.join(filename)).inspect_err(|e| {
+                    log::error!(
+                        "Failed to copy active journal {} during backup: {e:?}",
+                        active_path.display(),
+                    );
+                })?;
+            }
+
+            // `journal_writer` is dropped here, releasing the writer lock.
+            // Writes can resume while sealed journals are being copied below.
         }
 
         // Copy sealed journal files while holding a read lock on the journal manager.
