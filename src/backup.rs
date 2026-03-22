@@ -247,24 +247,21 @@ impl Database {
         backup_keyspace(&meta_path, &keyspaces_dst)?;
 
         // Backup all user keyspaces.
-        // Clone paths under the read lock, then release it before doing I/O
-        // so that Database::keyspace() (which needs a write lock) is not blocked.
-        //
-        // Concurrent writes after the journal snapshot go into a new WAL and
-        // are not in the backup. The backed-up WAL + on-disk SSTs form a
-        // consistent state — recovery deduplicates via sequence numbers.
-        let keyspace_paths: Vec<_> = {
+        // Clone Keyspace handles (Arc) under the read lock to keep them alive
+        // during backup — this prevents a concurrent delete_keyspace() from
+        // dropping the last handle and cleaning up the directory mid-copy.
+        // The read lock is released before I/O so Database::keyspace() (which
+        // needs a write lock) is not blocked.
+        let keyspace_handles: Vec<crate::Keyspace> = {
             #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
             let keyspaces = self.supervisor.keyspaces.read().expect("lock is poisoned");
-            keyspaces
-                .values()
-                .map(|ks| (ks.tree.tree_config().path.clone(), ks.name.clone()))
-                .collect()
+            keyspaces.values().cloned().collect()
         };
 
-        for (ks_path, name) in &keyspace_paths {
-            backup_keyspace(ks_path, &keyspaces_dst)?;
-            log::debug!("Backed up keyspace {name:?}");
+        for ks in &keyspace_handles {
+            let ks_path = ks.tree.tree_config().path.clone();
+            backup_keyspace(&ks_path, &keyspaces_dst)?;
+            log::debug!("Backed up keyspace {:?}", ks.name);
         }
 
         // Copy and fsync the database version marker
