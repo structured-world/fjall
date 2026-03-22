@@ -208,14 +208,16 @@ impl Database {
         // Atomically create the destination directory; fail if it already exists.
         // Using create_dir (not create_dir_all) avoids the TOCTOU race between
         // try_exists() and directory creation.
-        if let Some(parent) = path.parent() {
+        // path.parent() returns Some("") for relative paths like "backup";
+        // skip create_dir_all/fsync on empty parent (equivalent to current dir).
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
 
         match std::fs::create_dir(path) {
             Ok(()) => {
                 // Ensure the directory entry is durable by fsyncing the parent.
-                if let Some(parent) = path.parent() {
+                if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
                     fsync_directory(parent)?;
                 }
             }
@@ -239,15 +241,21 @@ impl Database {
         // Backup meta keyspace (keyspace 0)
         backup_keyspace(self.meta_keyspace.tree(), &keyspaces_dst)?;
 
-        // Backup all user keyspaces
-        {
+        // Backup all user keyspaces.
+        // Clone handles under the read lock, then release it before doing I/O
+        // so that Database::keyspace() (which needs a write lock) is not blocked.
+        let keyspace_handles: Vec<_> = {
             #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
             let keyspaces = self.supervisor.keyspaces.read().expect("lock is poisoned");
+            keyspaces
+                .values()
+                .map(|ks| (ks.tree.clone(), ks.name.clone()))
+                .collect()
+        };
 
-            for keyspace in keyspaces.values() {
-                backup_keyspace(&keyspace.tree, &keyspaces_dst)?;
-                log::debug!("Backed up keyspace {:?}", keyspace.name);
-            }
+        for (tree, name) in &keyspace_handles {
+            backup_keyspace(tree, &keyspaces_dst)?;
+            log::debug!("Backed up keyspace {name:?}");
         }
 
         // Copy and fsync the database version marker
@@ -320,8 +328,11 @@ impl Database {
         }
 
         // Copy sealed journal files while holding a read lock on the journal manager.
-        // Without the lock, maintenance could delete a sealed journal between
-        // listing and copying, causing a spurious NotFound error.
+        // The lock is intentionally held for the entire copy duration: unlike the
+        // keyspaces map (where we can clone handles and release), sealed journal
+        // files can be deleted by JournalManager::maintenance() which acquires a
+        // write lock. Releasing the read lock before copying would allow maintenance
+        // to delete a journal file between listing and copying.
         {
             #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
             let journal_manager = self
