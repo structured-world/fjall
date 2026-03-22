@@ -358,35 +358,38 @@ mod tests {
     use test_log::test;
 
     #[test]
-    fn backup_tree_missing_manifest_returns_error() {
-        let src = tempfile::tempdir().unwrap();
-        let dst = tempfile::tempdir().unwrap();
+    fn backup_tree_missing_manifest_returns_error() -> std::io::Result<()> {
+        let src = tempfile::tempdir()?;
+        let dst = tempfile::tempdir()?;
         let dst_path = dst.path().join("out");
-        std::fs::create_dir_all(&dst_path).unwrap();
+        std::fs::create_dir_all(&dst_path)?;
 
         // src has no "current" file → backup_tree should return NotFound
         let result = backup_tree(src.path(), &dst_path);
-        assert!(result.is_err());
-
-        let err = result.unwrap_err();
+        let err = match result {
+            Err(err) => err,
+            Ok(()) => panic!("backup_tree should fail without a manifest"),
+        };
         assert!(
             matches!(&err, crate::Error::Io(e) if e.kind() == std::io::ErrorKind::NotFound),
             "expected NotFound for missing manifest, got: {err:?}",
         );
+        Ok(())
     }
 
     #[test]
-    fn copy_and_fsync_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
+    fn copy_and_fsync_round_trip() -> std::io::Result<()> {
+        let dir = tempfile::tempdir()?;
         let src = dir.path().join("src.dat");
         let dst = dir.path().join("dst.dat");
 
         let data = b"hello backup";
-        std::fs::write(&src, data).unwrap();
+        std::fs::write(&src, data)?;
 
-        copy_and_fsync(&src, &dst).unwrap();
+        copy_and_fsync(&src, &dst)?;
 
-        assert_eq!(std::fs::read(&dst).unwrap(), data);
+        assert_eq!(std::fs::read(&dst)?, data);
+        Ok(())
     }
 
     #[test]
