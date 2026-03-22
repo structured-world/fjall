@@ -27,7 +27,7 @@ use std::{
 use writer::Writer;
 
 /// Type alias for the mutex guard returned by [`Journal::get_writer`].
-pub(crate) type JournalWriterGuard<'a> = MutexGuard<'a, Box<dyn JournalWriter>>;
+pub type JournalWriterGuard<'a> = MutexGuard<'a, Box<dyn JournalWriter>>;
 
 /// The journal (write-ahead log) ensures crash safety by recording
 /// mutations before they are applied to memtables.

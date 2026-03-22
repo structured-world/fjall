@@ -475,11 +475,11 @@ impl JournalWriter for Writer {
         value_type: ValueType,
         seqno: SeqNo,
     ) -> crate::Result<usize> {
-        Writer::write_raw(self, keyspace_id, key, value, value_type, seqno)
+        Self::write_raw(self, keyspace_id, key, value, value_type, seqno)
     }
 
     fn write_batch(&mut self, items: &[BatchItem], seqno: SeqNo) -> crate::Result<usize> {
-        Writer::write_batch_impl(self, items, seqno)
+        Self::write_batch_impl(self, items, seqno)
     }
 
     fn write_clear(
@@ -487,27 +487,27 @@ impl JournalWriter for Writer {
         keyspace_id: InternalKeyspaceId,
         seqno: SeqNo,
     ) -> crate::Result<usize> {
-        Writer::write_clear(self, keyspace_id, seqno)
+        Self::write_clear(self, keyspace_id, seqno)
     }
 
     fn persist(&mut self, mode: PersistMode) -> std::io::Result<()> {
-        Writer::persist(self, mode)
+        Self::persist(self, mode)
     }
 
     fn pos(&mut self) -> crate::Result<u64> {
-        Writer::pos(self)
+        Self::pos(self)
     }
 
     fn len(&self) -> crate::Result<u64> {
-        Writer::len(self)
+        Self::len(self)
     }
 
     fn rotate(&mut self) -> crate::Result<(PathBuf, PathBuf)> {
-        Writer::rotate(self)
+        Self::rotate(self)
     }
 
     fn set_compression(&mut self, comp: CompressionType, threshold: usize) {
-        Writer::set_compression(self, comp, threshold);
+        Self::set_compression(self, comp, threshold);
     }
 
     fn path(&self) -> Option<PathBuf> {

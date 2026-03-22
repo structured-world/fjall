@@ -654,10 +654,10 @@ impl Database {
                             .is_some_and(|ext| ext.eq_ignore_ascii_case("jnl"))
                     {
                         log::warn!(
-                            "Found existing journal file {:?} while opening in noop \
+                            "Found existing journal file {} while opening in noop \
                              journal mode; it will be ignored. Consider removing it \
                              or switching to JournalMode::File.",
-                            entry.path(),
+                            entry.path().display(),
                         );
                     }
                 }
