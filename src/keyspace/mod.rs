@@ -263,6 +263,12 @@ impl Keyspace {
             &self.supervisor.pending_watermark,
         )?;
 
+        // NOTE: tree.clear() failure after journaling creates WAL/memtable
+        // divergence (recovery replays the clear even though the API returned
+        // an error). This matches pre-group-commit behavior — the original code
+        // also propagated tree.clear() errors without poisoning. Poisoning here
+        // would be a correctness improvement but changes the public error contract
+        // and belongs in a separate PR.
         match self.tree.clear() {
             Ok(()) => {
                 self.supervisor.pending_watermark.applied(seqno);
