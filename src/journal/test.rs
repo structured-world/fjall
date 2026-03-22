@@ -1,3 +1,5 @@
+#![allow(clippy::indexing_slicing)]
+
 use super::*;
 use crate::batch::item::Item as BatchItem;
 use crate::file::MAGIC_BYTES;

@@ -1169,6 +1169,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::unwrap_used)]
     fn tx_snapshot_first_last_size_of() -> Result<(), Box<dyn std::error::Error>> {
         let env = setup()?;
 

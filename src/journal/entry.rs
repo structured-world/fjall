@@ -298,6 +298,7 @@ impl Entry {
     #[cfg(test)]
     pub fn encode_into_vec(&self) -> Vec<u8> {
         let mut buf = Vec::new();
+        #[allow(clippy::expect_used)]
         self.encode_into(&mut buf).expect("should encode");
         buf
     }
