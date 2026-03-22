@@ -10,7 +10,7 @@ use crate::{
     journal::{manager::JournalManager, Journal},
     snapshot_tracker::SnapshotTracker,
     write_buffer_manager::WriteBufferManager,
-    write_group::WriteGroup,
+    write_group::{PendingWatermark, WriteGroup},
 };
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -32,6 +32,10 @@ pub struct SupervisorInner {
 
     /// Group commit pipeline — amortizes journal I/O across concurrent writers
     pub(crate) write_group: WriteGroup,
+
+    /// Ordered watermark — ensures MVCC visibility advances only through
+    /// consecutively-applied seqnos (prevents out-of-order publish after group commit)
+    pub(crate) pending_watermark: PendingWatermark,
 
     /// Tracks journal size and garbage collects sealed journals when possible
     pub(crate) journal_manager: Arc<RwLock<JournalManager>>,

@@ -131,6 +131,7 @@ impl WriteBatch {
             &self.db.supervisor.journal,
             &self.db.supervisor.seqno,
             &self.db.is_poisoned,
+            &self.db.supervisor.pending_watermark,
         )?;
 
         let WriteOp::Batch { items } = op else {
@@ -176,7 +177,7 @@ impl WriteBatch {
             keyspaces_with_possible_stall.insert(item.keyspace.clone());
         }
 
-        self.db.supervisor.snapshot_tracker.publish(batch_seqno);
+        self.db.supervisor.pending_watermark.applied(batch_seqno);
 
         log::trace!("batch: Write group commit done");
 

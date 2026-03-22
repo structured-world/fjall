@@ -255,11 +255,12 @@ impl Keyspace {
             &self.supervisor.journal,
             &self.supervisor.seqno,
             &self.is_poisoned,
+            &self.supervisor.pending_watermark,
         )?;
 
         self.tree.clear()?;
 
-        self.supervisor.snapshot_tracker.publish(seqno);
+        self.supervisor.pending_watermark.applied(seqno);
 
         Ok(())
     }
@@ -937,6 +938,7 @@ impl Keyspace {
             &self.supervisor.journal,
             &self.supervisor.seqno,
             &self.is_poisoned,
+            &self.supervisor.pending_watermark,
         )?;
 
         let WriteOp::Raw { key, value, .. } = op else {
@@ -945,7 +947,7 @@ impl Keyspace {
 
         let (item_size, memtable_size) = self.tree.insert(key, value, seqno);
 
-        self.supervisor.snapshot_tracker.publish(seqno);
+        self.supervisor.pending_watermark.applied(seqno);
 
         self.supervisor.write_buffer_size.allocate(item_size);
         self.maintenance(memtable_size);
@@ -1068,13 +1070,14 @@ impl Keyspace {
             WriteOp::Raw {
                 keyspace_id: self.id,
                 key,
-                value: vec![].into(),
+                value: UserValue::empty(),
                 value_type: lsm_tree::ValueType::Tombstone,
             },
             persist_mode,
             &self.supervisor.journal,
             &self.supervisor.seqno,
             &self.is_poisoned,
+            &self.supervisor.pending_watermark,
         )?;
 
         let WriteOp::Raw { key, .. } = op else {
@@ -1083,7 +1086,7 @@ impl Keyspace {
 
         let (item_size, memtable_size) = self.tree.remove(key, seqno);
 
-        self.supervisor.snapshot_tracker.publish(seqno);
+        self.supervisor.pending_watermark.applied(seqno);
 
         self.supervisor.write_buffer_size.allocate(item_size);
         self.maintenance(memtable_size);
@@ -1151,13 +1154,14 @@ impl Keyspace {
             WriteOp::Raw {
                 keyspace_id: self.id,
                 key,
-                value: vec![].into(),
+                value: UserValue::empty(),
                 value_type: lsm_tree::ValueType::WeakTombstone,
             },
             persist_mode,
             &self.supervisor.journal,
             &self.supervisor.seqno,
             &self.is_poisoned,
+            &self.supervisor.pending_watermark,
         )?;
 
         let WriteOp::Raw { key, .. } = op else {
@@ -1166,7 +1170,7 @@ impl Keyspace {
 
         let (item_size, memtable_size) = self.tree.remove(key, seqno);
 
-        self.supervisor.snapshot_tracker.publish(seqno);
+        self.supervisor.pending_watermark.applied(seqno);
 
         self.supervisor.write_buffer_size.allocate(item_size);
         self.maintenance(memtable_size);

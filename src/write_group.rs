@@ -15,8 +15,10 @@ use crate::{
     batch::item::Item as BatchItem,
     journal::{writer::PersistMode, Journal},
     keyspace::InternalKeyspaceId,
+    snapshot_tracker::SnapshotTracker,
 };
 use lsm_tree::{SeqNo, SharedSequenceNumberGenerator, UserKey, UserValue, ValueType};
+use std::collections::BTreeSet;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Condvar, Mutex,
@@ -143,6 +145,7 @@ impl WriteGroup {
         journal: &Journal,
         seqno_gen: &SharedSequenceNumberGenerator,
         is_poisoned: &AtomicBool,
+        watermark: &PendingWatermark,
     ) -> crate::Result<(SeqNo, WriteOp)> {
         let slot = Arc::new(WriteSlot::new());
 
@@ -163,7 +166,7 @@ impl WriteGroup {
         };
 
         if am_leader {
-            self.run_leader(journal, seqno_gen, is_poisoned, &slot)
+            self.run_leader(journal, seqno_gen, is_poisoned, &slot, watermark)
         } else {
             slot.wait()
         }
@@ -180,6 +183,7 @@ impl WriteGroup {
         seqno_gen: &SharedSequenceNumberGenerator,
         is_poisoned: &AtomicBool,
         leader_slot: &Arc<WriteSlot>,
+        watermark: &PendingWatermark,
     ) -> crate::Result<(SeqNo, WriteOp)> {
         // Acquire journal writer (serialization point with rotate/recovery)
         let mut journal_writer = journal.get_writer();
@@ -272,6 +276,11 @@ impl WriteGroup {
                 }
             }
 
+            // IMPORTANT: register seqnos as pending BEFORE waking followers.
+            // This ensures the watermark can't advance past these seqnos
+            // until all memtable applies are complete.
+            watermark.register(&seqnos);
+
             // Deliver results: move ops back to callers for memtable apply
             for (write, seqno) in writes.into_iter().zip(seqnos) {
                 if leader_result.is_none() && Arc::ptr_eq(&write.slot, leader_slot) {
@@ -312,15 +321,91 @@ impl WriteGroup {
     }
 }
 
+/// Tracks pending write seqnos and ensures the MVCC visible watermark
+/// only advances through consecutively-applied seqnos.
+///
+/// Without this, concurrent memtable-apply + publish after group commit
+/// can advance the watermark past seqnos whose writes haven't been applied
+/// to the memtable yet, breaking snapshot read consistency.
+///
+/// # How it works
+///
+/// 1. The group commit leader **registers** all seqnos in the group as pending
+///    (while holding the journal mutex, before any memtable apply).
+/// 2. Each caller **applies** its write to the memtable, then calls [`applied`].
+/// 3. `applied` removes the seqno from the pending set and advances the
+///    watermark to `min(pending) - 1` — i.e., all seqnos below the lowest
+///    still-pending one are guaranteed visible.
+pub struct PendingWatermark {
+    inner: Mutex<WatermarkInner>,
+    snapshot_tracker: SnapshotTracker,
+}
+
+struct WatermarkInner {
+    pending: BTreeSet<SeqNo>,
+}
+
+impl PendingWatermark {
+    pub fn new(snapshot_tracker: SnapshotTracker) -> Self {
+        Self {
+            inner: Mutex::new(WatermarkInner {
+                pending: BTreeSet::new(),
+            }),
+            snapshot_tracker,
+        }
+    }
+
+    /// Register a batch of seqnos as pending (not yet applied to memtable).
+    ///
+    /// Must be called BEFORE the seqnos become eligible for watermark advancement
+    /// (i.e., while the journal mutex is still held by the leader).
+    pub(crate) fn register(&self, seqnos: &[SeqNo]) {
+        #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
+        let mut inner = self.inner.lock().expect("watermark lock poisoned");
+        for &seqno in seqnos {
+            inner.pending.insert(seqno);
+        }
+    }
+
+    /// Mark a seqno as applied (memtable write complete) and advance the
+    /// visible watermark as far as safely possible.
+    pub(crate) fn applied(&self, seqno: SeqNo) {
+        #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
+        let mut inner = self.inner.lock().expect("watermark lock poisoned");
+        inner.pending.remove(&seqno);
+
+        // The safe watermark is one below the lowest still-pending seqno.
+        // If nothing is pending, all writes up to this seqno are applied.
+        let safe_seqno = match inner.pending.iter().next() {
+            Some(&min_pending) => {
+                if min_pending == 0 {
+                    return; // seqno 0 still pending, can't advance at all
+                }
+                min_pending - 1
+            }
+            None => seqno,
+        };
+
+        drop(inner);
+
+        // publish uses fetch_max internally, so lower values are no-ops
+        self.snapshot_tracker.publish(safe_seqno);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::journal::Journal;
+    use crate::{journal::Journal, snapshot_tracker::SnapshotTracker};
     use lsm_tree::{SequenceNumberCounter, SharedSequenceNumberGenerator};
     use std::sync::Arc;
 
     fn make_seqno() -> SharedSequenceNumberGenerator {
         Arc::new(SequenceNumberCounter::default())
+    }
+
+    fn make_watermark(seqno: &SharedSequenceNumberGenerator) -> PendingWatermark {
+        PendingWatermark::new(SnapshotTracker::new(Arc::clone(seqno)))
     }
 
     #[test]
@@ -331,6 +416,7 @@ mod tests {
         let seqno: SharedSequenceNumberGenerator = make_seqno();
         let is_poisoned = AtomicBool::new(false);
         let wg = WriteGroup::new();
+        let wm = make_watermark(&seqno);
 
         let (seq, op) = wg.submit(
             WriteOp::Raw {
@@ -343,6 +429,7 @@ mod tests {
             &journal,
             &seqno,
             &is_poisoned,
+            &wm,
         )?;
 
         assert_eq!(seq, 0);
@@ -364,6 +451,7 @@ mod tests {
         let seqno: SharedSequenceNumberGenerator = make_seqno();
         let is_poisoned = Arc::new(AtomicBool::new(false));
         let wg = Arc::new(WriteGroup::new());
+        let wm = Arc::new(make_watermark(&seqno));
 
         let num_writers = 8;
         let barrier = Arc::new(std::sync::Barrier::new(num_writers));
@@ -374,6 +462,7 @@ mod tests {
             let seqno = Arc::clone(&seqno);
             let is_poisoned = Arc::clone(&is_poisoned);
             let wg = Arc::clone(&wg);
+            let wm = Arc::clone(&wm);
             let barrier = Arc::clone(&barrier);
 
             handles.push(std::thread::spawn(move || {
@@ -395,6 +484,7 @@ mod tests {
                         &journal,
                         &seqno,
                         &is_poisoned,
+                        &wm,
                     )
                     .expect("submit must not fail");
 
@@ -432,6 +522,7 @@ mod tests {
         let seqno: SharedSequenceNumberGenerator = make_seqno();
         let is_poisoned = AtomicBool::new(true);
         let wg = WriteGroup::new();
+        let wm = make_watermark(&seqno);
 
         let result = wg.submit(
             WriteOp::Raw {
@@ -444,6 +535,7 @@ mod tests {
             &journal,
             &seqno,
             &is_poisoned,
+            &wm,
         );
 
         assert!(result.is_err());
