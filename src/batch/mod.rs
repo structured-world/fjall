@@ -95,6 +95,11 @@ impl WriteBatch {
     ///
     /// The operand is lazily combined with the existing value during reads
     /// and compaction, using the merge operator registered on the keyspace.
+    ///
+    /// All items in a batch share a single sequence number at commit time.
+    /// Multiple merge operands for the same key within one batch will
+    /// therefore collapse to the last operand. Use separate batches or
+    /// `Keyspace::merge` directly if all operands must be preserved.
     pub fn merge<K: Into<UserKey>, V: Into<UserValue>>(
         &mut self,
         p: &Keyspace,

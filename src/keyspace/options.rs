@@ -159,7 +159,7 @@ impl CreateOptions {
     /// (operands) that are lazily combined during reads and compaction.
     ///
     /// The merge operator is not persisted to disk. After reopening the
-    /// database, re-install it via [`Builder::with_merge_operator_assigner`]
+    /// database, re-install it via [`crate::Builder::with_merge_operator_assigner`]
     /// so that recovery and subsequent reads can resolve merge operands.
     #[must_use]
     pub fn with_merge_operator(mut self, op: Option<Arc<dyn MergeOperator>>) -> Self {

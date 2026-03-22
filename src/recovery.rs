@@ -195,12 +195,9 @@ pub fn recover_sealed_memtables(
                         tree.remove_weak(item.key, batch.seqno);
                     }
                     lsm_tree::ValueType::MergeOperand => {
-                        assert!(
-                            handle.config.merge_operator.is_some(),
-                            "WAL replay encountered MergeOperand for keyspace `{keyspace_name}` \
-                             but no merge operator is configured; install one via \
-                             Builder::with_merge_operator_assigner()",
-                        );
+                        if handle.config.merge_operator.is_none() {
+                            return Err(crate::Error::MissingMergeOperator);
+                        }
                         tree.merge(item.key, item.value, batch.seqno);
                     }
                     lsm_tree::ValueType::Indirection => {
