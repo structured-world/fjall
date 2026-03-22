@@ -56,6 +56,7 @@ pub fn apply_to_base_config(
         .filter_block_partitioning_policy(our_config.filter_block_partitioning_policy.clone())
         .filter_policy(our_config.filter_policy.clone())
         .with_compaction_filter_factory(our_config.compaction_filter_factory.clone())
+        .with_merge_operator(our_config.merge_operator.clone())
 }
 
 pub struct KeyspaceInner {
@@ -949,6 +950,72 @@ impl Keyspace {
         }
 
         let (item_size, memtable_size) = self.tree.insert(key, value, seqno);
+
+        self.supervisor.snapshot_tracker.publish(seqno);
+
+        drop(journal_writer);
+
+        self.supervisor.write_buffer_size.allocate(item_size);
+        self.maintenance(memtable_size);
+
+        Ok(())
+    }
+
+    /// Stores a merge operand for the given key.
+    ///
+    /// The operand is lazily combined with the existing value (if any) and
+    /// other operands during reads and compaction, using the merge operator
+    /// registered on this keyspace.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no merge operator was registered for this keyspace.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn merge<K: Into<UserKey>, V: Into<UserValue>>(
+        &self,
+        key: K,
+        operand: V,
+    ) -> crate::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        if self.is_deleted.load(Ordering::Relaxed) {
+            return Err(crate::Error::KeyspaceDeleted);
+        }
+
+        let key = key.into();
+        let operand = operand.into();
+
+        let mut journal_writer = self.supervisor.journal.get_writer();
+
+        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
+        if self.is_poisoned.load(Ordering::Relaxed) {
+            return Err(crate::Error::Poisoned);
+        }
+
+        let seqno = self.supervisor.seqno.next();
+
+        journal_writer.write_raw(
+            self.id,
+            &key,
+            &operand,
+            lsm_tree::ValueType::MergeOperand,
+            seqno,
+        )?;
+
+        if !self.config.manual_journal_persist {
+            journal_writer
+                .persist(crate::PersistMode::Buffer)
+                .map_err(|e| {
+                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
+                    self.is_poisoned.store(true, Ordering::Relaxed);
+                    e
+                })?;
+        }
+
+        let (item_size, memtable_size) = self.tree.merge(key, operand, seqno);
 
         self.supervisor.snapshot_tracker.publish(seqno);
 

@@ -36,6 +36,7 @@ impl std::fmt::Debug for Item {
                 ValueType::Tombstone => "T",
                 ValueType::WeakTombstone => "W",
                 ValueType::Indirection => "Vb",
+                ValueType::MergeOperand => "M",
             },
             self.value
         )

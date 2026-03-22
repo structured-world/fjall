@@ -14,6 +14,13 @@ use std::{
 pub type CompactionFilterAssigner =
     Arc<dyn Fn(&str) -> Option<Arc<dyn lsm_tree::compaction::filter::Factory>> + Send + Sync>;
 
+/// A callback that assigns a merge operator to a keyspace by name.
+///
+/// During recovery, keyspaces are rebuilt from metadata and this function
+/// is called to re-install the merge operator (which is not persisted).
+pub type MergeOperatorAssigner =
+    Arc<dyn Fn(&str) -> Option<Arc<dyn lsm_tree::MergeOperator>> + Send + Sync>;
+
 /// Controls which journal (WAL) implementation the database uses.
 ///
 /// The default [`File`](JournalMode::File) mode writes a crash-safe
@@ -77,6 +84,8 @@ pub struct Config {
     //
     pub(crate) compaction_filter_factory_assigner: Option<CompactionFilterAssigner>,
 
+    pub(crate) merge_operator_assigner: Option<MergeOperatorAssigner>,
+
     /// Custom sequence number generator.
     ///
     /// When set, this generator is used instead of the default
@@ -127,6 +136,7 @@ impl Config {
             cache: Arc::new(Cache::with_capacity_bytes(/* 32 MiB */ 32 * 1_024 * 1_024)),
 
             compaction_filter_factory_assigner: None,
+            merge_operator_assigner: None,
             seqno_generator: None,
             journal_mode: JournalMode::default(),
         }

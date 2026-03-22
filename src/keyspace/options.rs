@@ -14,6 +14,7 @@ use crate::{
 use byteorder::ReadBytesExt;
 use lsm_tree::{
     compaction::Factory as CompactionFilterFactory, CompressionType, KvPair, KvSeparationOptions,
+    MergeOperator,
 };
 use std::sync::Arc;
 
@@ -78,6 +79,9 @@ pub struct CreateOptions {
     pub kv_separation_opts: Option<KvSeparationOptions>,
 
     pub(crate) compaction_filter_factory: Option<Arc<dyn CompactionFilterFactory>>,
+
+    /// Merge operator for commutative LSM operations on this keyspace.
+    pub(crate) merge_operator: Option<Arc<dyn MergeOperator>>,
 }
 
 impl Default for CreateOptions {
@@ -126,6 +130,8 @@ impl Default for CreateOptions {
             kv_separation_opts: None,
 
             compaction_filter_factory: None,
+
+            merge_operator: None,
         }
     }
 }
@@ -144,6 +150,16 @@ impl CreateOptions {
         factory: Arc<dyn CompactionFilterFactory + 'static>,
     ) -> Self {
         self.compaction_filter_factory = Some(factory);
+        self
+    }
+
+    /// Installs a merge operator for commutative operations on this keyspace.
+    ///
+    /// When set, enables `Keyspace::merge` which stores partial updates
+    /// (operands) that are lazily combined during reads and compaction.
+    #[must_use]
+    pub fn with_merge_operator(mut self, op: Option<Arc<dyn MergeOperator>>) -> Self {
+        self.merge_operator = op;
         self
     }
 
@@ -372,6 +388,8 @@ impl CreateOptions {
             kv_separation_opts: blob_opts.transpose()?,
 
             compaction_filter_factory: None,
+
+            merge_operator: None,
         })
     }
 

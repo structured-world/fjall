@@ -283,6 +283,19 @@ impl<'tx> WriteTransaction<'tx> {
         self.inner.insert(keyspace.inner(), key, value);
     }
 
+    /// Stores a merge operand for the given key.
+    ///
+    /// The operand is lazily combined with the existing value during reads
+    /// and compaction, using the merge operator registered on the keyspace.
+    pub fn merge<K: Into<UserKey>, V: Into<UserValue>>(
+        &mut self,
+        keyspace: &SingleWriterTxKeyspace,
+        key: K,
+        operand: V,
+    ) {
+        self.inner.merge(keyspace.inner(), key, operand);
+    }
+
     /// Removes an item from the keyspace.
     ///
     /// The key may be up to 65536 bytes long.

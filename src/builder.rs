@@ -3,7 +3,7 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::{
-    db_config::{CompactionFilterAssigner, JournalMode},
+    db_config::{CompactionFilterAssigner, JournalMode, MergeOperatorAssigner},
     tx::single_writer::Openable,
     Config,
 };
@@ -190,6 +190,17 @@ impl<O: Openable> Builder<O> {
     #[must_use]
     pub fn with_compaction_filter_factories(mut self, f: CompactionFilterAssigner) -> Self {
         self.inner.compaction_filter_factory_assigner = Some(f);
+        self
+    }
+
+    /// Installs a callback that assigns merge operators to keyspaces by name.
+    ///
+    /// During recovery, keyspaces rebuilt from metadata receive the merge
+    /// operator returned by this callback for their name. The merge operator
+    /// is a runtime property and is NOT persisted to disk.
+    #[must_use]
+    pub fn with_merge_operator_assigner(mut self, f: MergeOperatorAssigner) -> Self {
+        self.inner.merge_operator_assigner = Some(f);
         self
     }
 

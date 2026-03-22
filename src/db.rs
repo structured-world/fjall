@@ -504,6 +504,16 @@ impl Database {
                 opts = opts.with_compaction_filter_factory(f);
             }
 
+            // Install merge operator if needed
+            if let Some(op) = self
+                .config
+                .merge_operator_assigner
+                .as_ref()
+                .and_then(|f| f(&name))
+            {
+                opts = opts.with_merge_operator(Some(op));
+            }
+
             let handle = Keyspace::create_new(keyspace_id, self, name.clone(), opts)?;
 
             self.meta_keyspace
@@ -845,6 +855,9 @@ impl Database {
                                 }
                                 lsm_tree::ValueType::WeakTombstone => {
                                     tree.remove_weak(item.key, batch.seqno);
+                                }
+                                lsm_tree::ValueType::MergeOperand => {
+                                    tree.merge(item.key, item.value, batch.seqno);
                                 }
                                 lsm_tree::ValueType::Indirection => {
                                     unreachable!()

@@ -28,9 +28,10 @@ __internal_whitebox = []
 byteorder = { package = "byteorder-lite", version = "0.1.0" }
 byteview = "~0.10.1"
 # Fork with V4 disk format + SequenceNumberGenerator trait (structured-world/lsm-tree#10).
+# Includes merge operator support (lsm-tree#28, landed 2026-03-22).
 # TODO(#24): pin to tag = "v4.0.0" once lsm-tree release management is done.
 # Pinned to rev for reproducible builds until tag exists.
-lsm-tree = { git = "https://github.com/structured-world/lsm-tree.git", rev = "c03a443515ce90b70d40200d679c77a170209d83", default-features = false, features = [] }
+lsm-tree = { git = "https://github.com/structured-world/lsm-tree.git", rev = "b29c5b603f8a4a6599bf0134fe9f88c4ed6df34f", default-features = false, features = [] }
 log = "0.4.27"
 tempfile = "3.20.0"
 dashmap = "6.1.0"
