@@ -9,7 +9,7 @@ use crate::{
     Database,
 };
 use lsm_tree::AbstractTree;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Tries to hard-link `src` to `dst`, falling back to a durable copy if
 /// hard-linking fails (e.g., cross-device backup).
@@ -39,33 +39,34 @@ fn copy_and_fsync(src: &Path, dst: &Path) -> std::io::Result<()> {
     writer.sync_all()
 }
 
+/// Returns `parent` of `path`, normalizing empty parent (from relative paths
+/// like `"backup"`) to `"."` so that `create_dir_all` and `fsync_directory`
+/// always receive a valid path.
+fn effective_parent(path: &Path) -> PathBuf {
+    path.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+}
+
 /// LSM-tree on-disk layout:
 ///   `<keyspace>/current`       — manifest pointer (references active version)
 ///   `<keyspace>/v<N>`          — version snapshots
 ///   `<keyspace>/tables/<id>`   — SST segment files (immutable)
 ///   `<keyspace>/blobs/<id>`    — blob files for KV separation (immutable)
 ///
-/// Copies an LSM-tree's on-disk files into `dst_dir`:
+/// Copies an LSM-tree's on-disk files into `dst_dir` by enumerating the source
+/// directories directly:
 /// - SST and blob files are hard-linked (immutable, zero-copy safe)
 /// - Version files and manifest are copied and fsynced (small, mutable metadata)
 ///
-/// The manifest (`current`) and version files are copied BEFORE snapshotting
-/// the tree version to ensure the manifest references a version ≤ the one
-/// we use for table enumeration. Any extra tables linked from a newer
-/// in-memory version are harmless (recovery cleans up orphaned tables).
-fn backup_tree(tree: &lsm_tree::AnyTree, dst_dir: &Path) -> crate::Result<()> {
-    let src_dir = &tree.tree_config().path;
-
-    // Copy manifest and version files FIRST, before current_version().
-    // This guarantees the on-disk `current` file references a version ≤
-    // the one we snapshot next, so all tables it references will be
-    // included in our hard-link set. If compaction creates a newer version
-    // between the copy and the snapshot, we link extra tables (which recovery
-    // cleans up as orphans) rather than missing tables (which would be fatal).
-
-    // Copy manifest (LSM_CURRENT_VERSION_MARKER file). This is required for keyspace recovery:
-    // recovery deletes keyspaces without a `current` marker, so backing up
-    // without it would produce an incomplete backup.
+/// Using directory enumeration (rather than `tree.current_version()`) avoids a
+/// race with compaction: the manifest (`current`) and linked tables are always
+/// from the same on-disk state. Any orphaned tables in the backup are cleaned
+/// up by recovery.
+fn backup_tree(src_dir: &Path, dst_dir: &Path) -> crate::Result<()> {
+    // Copy manifest (LSM_CURRENT_VERSION_MARKER file). This is required for
+    // keyspace recovery: recovery deletes keyspaces without a `current` marker,
+    // so backing up without it would produce an incomplete backup.
     let manifest_src = src_dir.join(LSM_CURRENT_VERSION_MARKER);
     if manifest_src.try_exists()? {
         copy_and_fsync(&manifest_src, &dst_dir.join(LSM_CURRENT_VERSION_MARKER))?;
@@ -91,40 +92,36 @@ fn backup_tree(tree: &lsm_tree::AnyTree, dst_dir: &Path) -> crate::Result<()> {
         }
     }
 
-    // NOW snapshot the version — guaranteed ≥ the manifest we just copied
-    let version = tree.current_version();
-
-    // Create tables/ subdirectory and hard-link SST files
+    // Hard-link all SST files from tables/ directory.
+    // Linking the full directory contents (rather than a version snapshot)
+    // ensures consistency with the copied manifest — any extra orphaned
+    // tables are harmless and cleaned up by recovery.
+    let tables_src = src_dir.join("tables");
     let tables_dst = dst_dir.join("tables");
     std::fs::create_dir_all(&tables_dst)?;
 
-    for table in version.iter_tables() {
-        let src = &*table.path;
-
-        #[expect(
-            clippy::expect_used,
-            reason = "SST file paths always have a file name component"
-        )]
-        let filename = src.file_name().expect("SST path should have file name");
-        link_or_copy(src, &tables_dst.join(filename))?;
+    if tables_src.try_exists()? {
+        for entry in std::fs::read_dir(&tables_src)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                link_or_copy(&entry.path(), &tables_dst.join(entry.file_name()))?;
+            }
+        }
     }
 
     fsync_directory(&tables_dst)?;
 
-    // Create blobs/ subdirectory and hard-link blob files (if any)
-    if version.blob_file_count() > 0 {
+    // Hard-link all blob files from blobs/ directory (if it exists)
+    let blobs_src = src_dir.join("blobs");
+    if blobs_src.try_exists()? {
         let blobs_dst = dst_dir.join("blobs");
         std::fs::create_dir_all(&blobs_dst)?;
 
-        for blob_file in version.blob_files.iter() {
-            let src = blob_file.path();
-
-            #[expect(
-                clippy::expect_used,
-                reason = "blob file paths always have a file name component"
-            )]
-            let filename = src.file_name().expect("blob path should have file name");
-            link_or_copy(src, &blobs_dst.join(filename))?;
+        for entry in std::fs::read_dir(&blobs_src)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                link_or_copy(&entry.path(), &blobs_dst.join(entry.file_name()))?;
+            }
         }
 
         fsync_directory(&blobs_dst)?;
@@ -136,18 +133,18 @@ fn backup_tree(tree: &lsm_tree::AnyTree, dst_dir: &Path) -> crate::Result<()> {
 }
 
 /// Copies a keyspace's LSM-tree into the backup destination.
-fn backup_keyspace(tree: &lsm_tree::AnyTree, keyspaces_dst: &Path) -> crate::Result<()> {
-    let src = &tree.tree_config().path;
-
+fn backup_keyspace(src_path: &Path, keyspaces_dst: &Path) -> crate::Result<()> {
     #[expect(
         clippy::expect_used,
         reason = "keyspace paths always have a directory name"
     )]
-    let dir_name = src.file_name().expect("keyspace path should have dir name");
+    let dir_name = src_path
+        .file_name()
+        .expect("keyspace path should have dir name");
     let dst = keyspaces_dst.join(dir_name);
 
     std::fs::create_dir_all(&dst)?;
-    backup_tree(tree, &dst)
+    backup_tree(src_path, &dst)
 }
 
 impl Database {
@@ -160,6 +157,15 @@ impl Database {
     /// LSM segment files (SSTs, blobs) are immutable and are hard-linked into
     /// the backup directory for O(1) per-file cost. If hard-linking fails
     /// (e.g., cross-device), files are copied instead.
+    ///
+    /// # Consistency model
+    ///
+    /// The backup captures a consistent point-in-time of the WAL (journal),
+    /// then copies SST/blob segments and metadata without holding the write
+    /// lock. Concurrent writes after the WAL snapshot go into a new journal
+    /// and are NOT included in the backup. Recovery replays the backed-up WAL
+    /// on top of the SST segments, producing a consistent state via LSM
+    /// sequence numbers (duplicate entries are resolved by highest seqno).
     ///
     /// # Noop journal mode
     ///
@@ -210,18 +216,13 @@ impl Database {
         // Atomically create the destination directory; fail if it already exists.
         // Using create_dir (not create_dir_all) avoids the TOCTOU race between
         // try_exists() and directory creation.
-        // path.parent() returns Some("") for relative paths like "backup";
-        // skip create_dir_all/fsync on empty parent (equivalent to current dir).
-        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent)?;
-        }
+        let parent = effective_parent(path);
+        std::fs::create_dir_all(&parent)?;
 
         match std::fs::create_dir(path) {
             Ok(()) => {
                 // Ensure the directory entry is durable by fsyncing the parent.
-                if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-                    fsync_directory(parent)?;
-                }
+                fsync_directory(&parent)?;
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 return Err(crate::Error::Io(std::io::Error::new(
@@ -241,22 +242,27 @@ impl Database {
         self.backup_journals(path)?;
 
         // Backup meta keyspace (keyspace 0)
-        backup_keyspace(self.meta_keyspace.tree(), &keyspaces_dst)?;
+        let meta_path = self.meta_keyspace.tree().tree_config().path.clone();
+        backup_keyspace(&meta_path, &keyspaces_dst)?;
 
         // Backup all user keyspaces.
-        // Clone handles under the read lock, then release it before doing I/O
+        // Clone paths under the read lock, then release it before doing I/O
         // so that Database::keyspace() (which needs a write lock) is not blocked.
-        let keyspace_handles: Vec<_> = {
+        //
+        // Concurrent writes after the journal snapshot go into a new WAL and
+        // are not in the backup. The backed-up WAL + on-disk SSTs form a
+        // consistent state — recovery deduplicates via sequence numbers.
+        let keyspace_paths: Vec<_> = {
             #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
             let keyspaces = self.supervisor.keyspaces.read().expect("lock is poisoned");
             keyspaces
                 .values()
-                .map(|ks| (ks.tree.clone(), ks.name.clone()))
+                .map(|ks| (ks.tree.tree_config().path.clone(), ks.name.clone()))
                 .collect()
         };
 
-        for (tree, name) in &keyspace_handles {
-            backup_keyspace(tree, &keyspaces_dst)?;
+        for (ks_path, name) in &keyspace_paths {
+            backup_keyspace(ks_path, &keyspaces_dst)?;
             log::debug!("Backed up keyspace {name:?}");
         }
 
