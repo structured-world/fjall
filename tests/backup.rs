@@ -374,3 +374,26 @@ fn backup_noop_journal() -> fjall::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn backup_twice_to_same_path_fails() -> fjall::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let backup = tempfile::tempdir()?;
+    let backup_path = backup.path().join("backup");
+
+    let db = Database::builder(&folder).open()?;
+
+    // First backup succeeds
+    db.backup_to(&backup_path)?;
+
+    // Second backup to same path fails with AlreadyExists
+    let err = db
+        .backup_to(&backup_path)
+        .expect_err("second backup to same path should fail");
+    assert!(
+        matches!(&err, fjall::Error::Io(e) if e.kind() == std::io::ErrorKind::AlreadyExists),
+        "expected AlreadyExists, got: {err:?}",
+    );
+
+    Ok(())
+}

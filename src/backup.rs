@@ -264,18 +264,10 @@ impl Database {
         copy_and_fsync(
             &self.config.path.join(VERSION_MARKER),
             &path.join(VERSION_MARKER),
-        )
-        .inspect_err(|e| {
-            log::error!("Failed to copy version marker during backup: {e:?}");
-        })?;
+        )?;
 
         // Create the lock file (recovery expects it to exist)
-        {
-            let lock = std::fs::File::create_new(path.join(LOCK_FILE)).inspect_err(|e| {
-                log::error!("Failed to create lock file in backup: {e:?}");
-            })?;
-            lock.sync_all()?;
-        }
+        std::fs::File::create_new(path.join(LOCK_FILE))?.sync_all()?;
 
         // Fsync all directories to ensure durability
         fsync_directory(&keyspaces_dst)?;
@@ -317,12 +309,7 @@ impl Database {
                     .file_name()
                     .expect("journal path should have file name");
 
-                copy_and_fsync(&active_path, &backup_path.join(filename)).inspect_err(|e| {
-                    log::error!(
-                        "Failed to copy active journal {} during backup: {e:?}",
-                        active_path.display(),
-                    );
-                })?;
+                copy_and_fsync(&active_path, &backup_path.join(filename))?;
             }
 
             // `journal_writer` is dropped here, releasing the writer lock.
@@ -354,12 +341,7 @@ impl Database {
                     .file_name()
                     .expect("sealed journal path should have file name");
 
-                copy_and_fsync(sealed_path, &backup_path.join(filename)).inspect_err(|e| {
-                    log::error!(
-                        "Failed to copy sealed journal {} during backup: {e:?}",
-                        sealed_path.display(),
-                    );
-                })?;
+                copy_and_fsync(sealed_path, &backup_path.join(filename))?;
             }
         }
 
