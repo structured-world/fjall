@@ -416,8 +416,10 @@ fn backup_under_concurrent_writes() -> fjall::Result<()> {
     db.persist(PersistMode::SyncAll)?;
 
     // Spawn concurrent writer threads that insert continuously.
-    // Writers only call insert (no rotate/flush) to avoid PermissionDenied
-    // errors on Windows where concurrent flush + hard-link can conflict.
+    // Writer threads only *explicitly* call `insert` (no direct rotate/flush
+    // calls). Any memtable rotation/flush is driven internally by `insert`
+    // itself. This avoids explicit concurrent flush operations in test code,
+    // which can conflict with hard-link creation on Windows.
     let stop = Arc::new(AtomicBool::new(false));
     let mut handles = vec![];
 
