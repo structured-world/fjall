@@ -91,6 +91,13 @@ impl JournalManager {
         self.disk_space_in_bytes
     }
 
+    /// Returns the paths of all sealed journal files.
+    ///
+    /// Used by [`Database::backup_to`] to copy sealed journals into the backup.
+    pub(crate) fn sealed_journal_paths(&self) -> Vec<PathBuf> {
+        self.items.iter().map(|item| item.path.clone()).collect()
+    }
+
     /// Gets keyspaces to be flushed so that the oldest journal can be safely evicted
     pub(crate) fn get_keyspaces_to_flush_for_oldest_journal_eviction(&self) -> Vec<Keyspace> {
         let mut items = vec![];

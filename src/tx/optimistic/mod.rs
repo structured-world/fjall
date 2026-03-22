@@ -181,4 +181,15 @@ impl OptimisticTxDatabase {
     pub fn disk_space(&self) -> crate::Result<u64> {
         self.inner.disk_space()
     }
+
+    /// Creates a consistent online backup of the database at the given path.
+    ///
+    /// See [`Database::backup_to`] for details.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the destination already exists or an I/O error occurs.
+    pub fn backup_to<P: AsRef<Path>>(&self, path: P) -> crate::Result<()> {
+        self.inner.backup_to(path)
+    }
 }

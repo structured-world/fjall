@@ -49,6 +49,11 @@ impl MetaKeyspace {
         }
     }
 
+    /// Returns a reference to the underlying LSM-tree.
+    pub(crate) fn tree(&self) -> &AnyTree {
+        &self.inner
+    }
+
     #[cfg(test)]
     fn len(&self) -> crate::Result<usize> {
         self.inner.len(SeqNo::MAX, None).map_err(Into::into)

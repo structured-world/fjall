@@ -89,6 +89,7 @@ macro_rules! fail_iter {
     };
 }
 
+mod backup;
 mod batch;
 mod builder;
 
