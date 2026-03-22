@@ -684,6 +684,10 @@ impl Database {
                 }
             }
 
+            // Noop journal reports disk_space=0 and count=1 (the active noop).
+            // Leftover .jnl files from a prior file-based run are NOT counted —
+            // they belong to the old journal mode and the warning above asks
+            // the user to clean them up or switch back to JournalMode::File.
             (Arc::new(Journal::noop()), vec![], true)
         } else {
             let journal_recovery = Journal::recover(
