@@ -431,6 +431,10 @@ fn backup_under_concurrent_writes() -> fjall::Result<()> {
             let mut counter = 0u64;
             while !stop_clone.load(std::sync::atomic::Ordering::Relaxed) {
                 let key = format!("t{thread_id}-{counter}");
+                // .ok() is intentional: inserts may fail under concurrent backup
+                // (e.g., DB poisoned by flush errors on Windows). The test verifies
+                // that pre-populated data survives in the backup, not that concurrent
+                // writes succeed.
                 items_clone.insert(key.as_bytes(), b"concurrent").ok();
                 counter += 1;
 
