@@ -204,10 +204,11 @@ impl Database {
     /// #
     /// # Ok::<_, fjall::Error>(())
     /// ```
-    #[expect(
-        clippy::missing_panics_doc,
-        reason = "panics only if internal RwLock is poisoned"
-    )]
+    /// # Panics
+    ///
+    /// May panic if internal invariants are violated: lock poisoning on
+    /// internal synchronization primitives, or unexpected failures when
+    /// deriving internal filesystem paths.
     pub fn backup_to<P: AsRef<Path>>(&self, path: P) -> crate::Result<()> {
         let path = path.as_ref();
 
