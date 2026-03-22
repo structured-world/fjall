@@ -138,6 +138,13 @@ impl WriteGroup {
     /// If this thread becomes the group leader, it writes all pending
     /// operations to the journal in a single batch with one fsync.
     /// Otherwise, the thread blocks until the current leader processes it.
+    ///
+    /// # Caller contract
+    ///
+    /// After a successful return, the caller **must** apply the write to the
+    /// memtable and then call [`PendingWatermark::applied`] with the returned
+    /// seqno. Failing to do so leaves the seqno permanently pending, blocking
+    /// the MVCC visible watermark from advancing.
     pub(crate) fn submit(
         &self,
         op: WriteOp,
@@ -188,8 +195,9 @@ impl WriteGroup {
         // Acquire journal writer (serialization point with rotate/recovery)
         let mut journal_writer = journal.get_writer();
 
-        // IMPORTANT: Check poisoned flag AFTER acquiring serialization (TOCTOU)
-        if is_poisoned.load(Ordering::Relaxed) {
+        // IMPORTANT: Check poisoned flag AFTER acquiring serialization (TOCTOU).
+        // Acquire pairs with the Release store on the error paths below.
+        if is_poisoned.load(Ordering::Acquire) {
             drop(journal_writer);
             self.drain_fail_and_release();
             return Err(crate::Error::Poisoned);
@@ -375,7 +383,11 @@ impl PendingWatermark {
     pub(crate) fn applied(&self, seqno: SeqNo) {
         #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
         let mut inner = self.inner.lock().expect("watermark lock poisoned");
-        inner.pending.remove(&seqno);
+        let removed = inner.pending.remove(&seqno);
+        debug_assert!(
+            removed,
+            "PendingWatermark::applied called with unknown or already-applied seqno: {seqno}",
+        );
 
         // The safe watermark is one below the lowest still-pending seqno.
         // If nothing is pending, all registered writes are applied.
@@ -443,6 +455,7 @@ mod tests {
             }
             _ => panic!("expected Raw op"),
         }
+        wm.applied(seq);
         Ok(())
     }
 
@@ -501,6 +514,7 @@ mod tests {
                     _ => panic!("expected Raw op"),
                 }
 
+                wm.applied(seq);
                 seq
             }));
         }
@@ -635,7 +649,7 @@ mod tests {
 
         // Apply seqno 0
         wm.applied(0);
-        // Now 0 is done, but 1 is still pending → watermark = 0
+        // Now 0 is done, but 1 is still pending → safe_seqno = 0, stored = 0+1 = 1
         assert_eq!(visible.get(), 1); // publish(0) → fetch_max(0+1) = 1
 
         // Apply seqno 1 — all done
