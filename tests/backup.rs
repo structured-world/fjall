@@ -1,6 +1,6 @@
 use fjall::{
-    Database, KeyspaceCreateOptions, KvSeparationOptions, OptimisticTxDatabase, PersistMode,
-    SingleWriterTxDatabase,
+    Database, JournalMode, KeyspaceCreateOptions, KvSeparationOptions, OptimisticTxDatabase,
+    PersistMode, SingleWriterTxDatabase,
 };
 use test_log::test;
 
@@ -273,6 +273,35 @@ fn backup_with_deletes() -> fjall::Result<()> {
     let items = restored.keyspace("items", KeyspaceCreateOptions::default)?;
     assert_eq!(&*items.get("keep")?.unwrap(), b"yes");
     assert!(items.get("delete_me")?.is_none());
+
+    Ok(())
+}
+
+#[test]
+fn backup_noop_journal() -> fjall::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let backup = tempfile::tempdir()?;
+    let backup_path = backup.path().join("backup");
+
+    let db = Database::builder(&folder)
+        .journal_mode(JournalMode::Noop)
+        .open()?;
+    let items = db.keyspace("items", KeyspaceCreateOptions::default)?;
+
+    // With noop journal, data is only durable after flush to segments
+    items.insert("a", "1")?;
+    items.rotate_memtable_and_wait()?;
+
+    db.backup_to(&backup_path)?;
+    drop(items);
+    drop(db);
+
+    // Restore — flushed data should be present, no journal files expected
+    let restored = Database::builder(&backup_path)
+        .journal_mode(JournalMode::Noop)
+        .open()?;
+    let items = restored.keyspace("items", KeyspaceCreateOptions::default)?;
+    assert_eq!(&*items.get("a")?.unwrap(), b"1");
 
     Ok(())
 }

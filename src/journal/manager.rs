@@ -93,7 +93,7 @@ impl JournalManager {
 
     /// Returns the paths of all sealed journal files.
     ///
-    /// Used by [`Database::backup_to`] to copy sealed journals into the backup.
+    /// Used by [`crate::Database::backup_to`] to copy sealed journals into the backup.
     pub(crate) fn sealed_journal_paths(&self) -> Vec<PathBuf> {
         self.items.iter().map(|item| item.path.clone()).collect()
     }
