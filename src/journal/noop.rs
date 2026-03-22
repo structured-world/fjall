@@ -45,7 +45,7 @@ impl JournalWriter for NoopWriter {
         Ok(())
     }
 
-    /// Always returns 0 — prevents journal rotation (triggered when `pos() > 64MB`).
+    /// Always returns 0 — prevents journal rotation (worker_pool rotates when `pos() > 64M`).
     fn pos(&mut self) -> crate::Result<u64> {
         Ok(0)
     }

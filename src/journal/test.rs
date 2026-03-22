@@ -7,13 +7,13 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use tempfile::tempdir;
 use test_log::test;
 
-/// Test helper: file-based journals always have a reader.
+/// Test helper: file-backed journals always have a reader.
 fn must_get_reader(journal: &Journal) -> crate::Result<batch_reader::JournalBatchReader> {
     journal
         .get_reader()?
         .ok_or(crate::Error::Io(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            "expected file-based journal with a reader, got noop journal (no path)",
+            "expected file-backed journal reader, but journal has no backing file",
         )))
 }
 
