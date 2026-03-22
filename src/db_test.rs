@@ -296,6 +296,9 @@ fn noop_journal_create_and_write() -> crate::Result<()> {
 
         // journal_disk_space reports 0
         assert_eq!(db.journal_disk_space()?, 0);
+
+        // No leftover .jnl from fresh noop open
+        assert!(!db.supervisor.journal.leftover_detected());
     }
 
     // Re-open with noop — recovery succeeds (no journal to replay)
@@ -347,6 +350,12 @@ fn noop_journal_mode_switch_detects_leftover_jnl() -> crate::Result<()> {
         let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
         tree.insert("a", "b")?;
         assert!(db.supervisor.journal.get_reader()?.is_none());
+
+        // Verify leftover .jnl detection actually ran
+        assert!(
+            db.supervisor.journal.leftover_detected(),
+            "noop open should detect leftover .jnl files from prior file-based run"
+        );
     }
 
     Ok(())

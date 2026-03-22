@@ -642,6 +642,8 @@ impl Database {
         let (active_journal, sealed_journals, was_active_created) = if is_noop_journal {
             log::info!("Using noop journal — recovery from external WAL");
 
+            let journal = Journal::noop();
+
             // Warn about leftover .jnl files from a prior file-based run to prevent
             // silent mode switches or accumulating unused disk space.
             // Journal files live at config.path (DB root), not in a subdirectory.
@@ -679,6 +681,7 @@ impl Database {
                              or switching to JournalMode::File.",
                                 entry.path().display(),
                             );
+                            journal.set_leftover_detected();
                         }
                     }
                 }
@@ -688,7 +691,7 @@ impl Database {
             // Leftover .jnl files from a prior file-based run are NOT counted —
             // they belong to the old journal mode and the warning above asks
             // the user to clean them up or switch back to JournalMode::File.
-            (Arc::new(Journal::noop()), vec![], true)
+            (Arc::new(journal), vec![], true)
         } else {
             let journal_recovery = Journal::recover(
                 &config.path,

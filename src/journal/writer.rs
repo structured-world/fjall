@@ -451,8 +451,10 @@ impl Writer {
 
         self.buf.clear();
 
-        // NOTE: entries.len() is surely never > u32::MAX
-        #[expect(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "batch size limited by memory; exceeding u32::MAX items is unreachable"
+        )]
         let item_count = items.len() as u32;
 
         let mut hasher = xxhash_rust::xxh3::Xxh3::default();

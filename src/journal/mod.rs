@@ -22,7 +22,10 @@ use reader::JournalReader;
 use recovery::{recover_journals, RecoveryResult};
 use std::{
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex, MutexGuard,
+    },
 };
 use writer::Writer;
 
@@ -38,6 +41,10 @@ pub type JournalWriterGuard<'a> = MutexGuard<'a, Box<dyn JournalWriter>>;
 /// integration) via [`crate::JournalMode`].
 pub struct Journal {
     writer: Mutex<Box<dyn JournalWriter>>,
+
+    /// Set to `true` when opening in noop mode and leftover `.jnl` files
+    /// are detected from a prior file-based run.
+    leftover_detected: AtomicBool,
 }
 
 impl std::fmt::Debug for Journal {
@@ -75,6 +82,7 @@ impl Journal {
 
         Self {
             writer: Mutex::new(writer),
+            leftover_detected: AtomicBool::new(false),
         }
     }
 
@@ -83,6 +91,17 @@ impl Journal {
     /// Use when an external system (e.g., Raft WAL) handles durability.
     pub fn noop() -> Self {
         Self::with_writer(Box::new(noop::NoopWriter))
+    }
+
+    /// Marks that leftover `.jnl` files were found during noop mode open.
+    pub(crate) fn set_leftover_detected(&self) {
+        self.leftover_detected.store(true, Ordering::Relaxed);
+    }
+
+    /// Returns `true` if leftover `.jnl` files were detected during open.
+    #[doc(hidden)]
+    pub fn leftover_detected(&self) -> bool {
+        self.leftover_detected.load(Ordering::Relaxed)
     }
 
     /// Sets compression on the underlying writer.
@@ -98,6 +117,7 @@ impl Journal {
     fn from_file<P: AsRef<Path>>(path: P) -> crate::Result<Self> {
         Ok(Self {
             writer: Mutex::new(Box::new(Writer::from_file(path)?)),
+            leftover_detected: AtomicBool::new(false),
         })
     }
 
@@ -129,6 +149,7 @@ impl Journal {
 
         Ok(Self {
             writer: Mutex::new(Box::new(writer)),
+            leftover_detected: AtomicBool::new(false),
         })
     }
 
