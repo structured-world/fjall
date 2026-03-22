@@ -504,14 +504,17 @@ impl Database {
                 opts = opts.with_compaction_filter_factory(f);
             }
 
-            // Install merge operator if needed
-            if let Some(op) = self
-                .config
-                .merge_operator_assigner
-                .as_ref()
-                .and_then(|f| f(&name))
-            {
-                opts = opts.with_merge_operator(Some(op));
+            // Install merge operator from assigner only if not already set
+            // explicitly via CreateOptions::with_merge_operator.
+            if opts.merge_operator.is_none() {
+                if let Some(op) = self
+                    .config
+                    .merge_operator_assigner
+                    .as_ref()
+                    .and_then(|f| f(&name))
+                {
+                    opts = opts.with_merge_operator(Some(op));
+                }
             }
 
             let handle = Keyspace::create_new(keyspace_id, self, name.clone(), opts)?;

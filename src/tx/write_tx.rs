@@ -255,6 +255,10 @@ impl BaseTransaction {
     // NOTE: DefaultUserComparator is correct — fjall does not expose custom
     // comparators at the keyspace level. If custom comparators are added in
     // the future, this must pull the comparator from the keyspace config.
+    //
+    // The Arc<DefaultUserComparator> allocation happens at most once per
+    // keyspace per transaction (guarded by or_insert_with), which is not
+    // a hot path — transactions are short-lived.
     fn memtable_for(&mut self, keyspace: &Keyspace) -> &Arc<Memtable> {
         self.memtables.entry(keyspace.clone()).or_insert_with(|| {
             Arc::new(Memtable::new(0, Arc::new(lsm_tree::DefaultUserComparator)))
