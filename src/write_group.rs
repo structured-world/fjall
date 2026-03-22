@@ -221,6 +221,14 @@ impl WriteGroup {
                 pending
             };
 
+            // Re-check poisoned on each iteration — another thread (e.g. flush
+            // worker via PoisonDart) may have poisoned the DB since we last checked.
+            if is_poisoned.load(Ordering::Acquire) {
+                Self::fail_group(&writes);
+                self.drain_fail_and_release();
+                return leader_result.ok_or(crate::Error::Poisoned);
+            }
+
             log::trace!("write group: leader processing {} writes", writes.len());
 
             // Determine strongest persist mode in this batch
