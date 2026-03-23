@@ -21,6 +21,7 @@ use crate::{
     version::FormatVersion,
     worker_pool::{WorkerMessage, WorkerPool},
     write_buffer_manager::WriteBufferManager,
+    write_group::{PendingWatermark, WriteGroup},
     HashMap, Keyspace, KeyspaceCreateOptions,
 };
 use lsm_tree::{AbstractTree, SequenceNumberCounter, SharedSequenceNumberGenerator};
@@ -769,13 +770,16 @@ impl Database {
             visible_seqno.clone(),
         );
 
+        let snapshot_tracker = SnapshotTracker::new(visible_seqno);
         let supervisor = Supervisor::new(SupervisorInner {
             db_config: config.clone(),
             keyspaces,
             flush_manager: FlushManager::new(),
             write_buffer_size: WriteBufferManager::default(),
-            snapshot_tracker: SnapshotTracker::new(visible_seqno),
+            pending_watermark: PendingWatermark::new(snapshot_tracker.clone()),
+            snapshot_tracker,
             journal: active_journal,
+            write_group: WriteGroup::new(),
             journal_manager: Arc::new(RwLock::new(journal_manager)),
             backpressure_lock: Mutex::default(),
             seqno,
@@ -1028,13 +1032,16 @@ impl Database {
             visible_seqno.clone(),
         );
 
+        let snapshot_tracker = SnapshotTracker::new(visible_seqno);
         let supervisor = Supervisor::new(SupervisorInner {
             db_config: config.clone(),
             keyspaces,
             flush_manager: FlushManager::new(),
             write_buffer_size: WriteBufferManager::default(),
-            snapshot_tracker: SnapshotTracker::new(visible_seqno),
+            pending_watermark: PendingWatermark::new(snapshot_tracker.clone()),
+            snapshot_tracker,
             journal,
+            write_group: WriteGroup::new(),
             journal_manager: Arc::new(RwLock::new(JournalManager::new())),
             backpressure_lock: Mutex::default(),
             seqno,

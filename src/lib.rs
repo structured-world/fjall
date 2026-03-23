@@ -130,6 +130,7 @@ mod tx;
 mod version;
 mod worker_pool;
 mod write_buffer_manager;
+mod write_group;
 
 pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, xxhash_rust::xxh3::Xxh3Builder>;
 

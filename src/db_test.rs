@@ -360,3 +360,55 @@ fn noop_journal_mode_switch_detects_leftover_jnl() -> crate::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn remove_weak_when_key_exists_deletes_key() -> crate::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let db = Database::builder(&folder).open()?;
+    let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+
+    tree.insert("a", "value")?;
+    assert!(tree.contains_key("a")?);
+
+    tree.remove_weak("a")?;
+    assert!(!tree.contains_key("a")?);
+
+    Ok(())
+}
+
+#[test]
+fn clear_when_keys_present_removes_all() -> crate::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let db = Database::builder(&folder).open()?;
+    let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+
+    tree.insert("a", "1")?;
+    tree.insert("b", "2")?;
+    assert_eq!(tree.len()?, 2);
+
+    tree.clear()?;
+    assert!(tree.is_empty()?);
+
+    Ok(())
+}
+
+#[test]
+fn batch_when_committed_insert_and_remove_atomic() -> crate::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let db = Database::builder(&folder).open()?;
+    let tree = db.keyspace("default", KeyspaceCreateOptions::default)?;
+
+    tree.insert("a", "1")?;
+
+    let mut batch = db.batch();
+    batch.insert(&tree, "b", "2");
+    batch.insert(&tree, "c", "3");
+    batch.remove(&tree, "a");
+    batch.commit()?;
+
+    assert!(!tree.contains_key("a")?);
+    assert!(tree.contains_key("b")?);
+    assert!(tree.contains_key("c")?);
+
+    Ok(())
+}

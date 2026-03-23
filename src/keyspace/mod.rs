@@ -19,6 +19,7 @@ use crate::{
     stats::Stats,
     supervisor::Supervisor,
     worker_pool::WorkerMessage,
+    write_group::WriteOp,
     Database, Guard, Iter,
 };
 use lsm_tree::{AbstractTree, AnyTree, SeqNo, UserKey, UserValue};
@@ -192,6 +193,15 @@ impl std::hash::Hash for Keyspace {
 }
 
 impl Keyspace {
+    /// Returns the journal persist mode for this keyspace.
+    fn persist_mode(&self) -> Option<crate::PersistMode> {
+        if self.config.manual_journal_persist {
+            None
+        } else {
+            Some(crate::PersistMode::Buffer)
+        }
+    }
+
     #[doc(hidden)]
     #[must_use]
     pub fn id(&self) -> InternalKeyspaceId {
@@ -240,36 +250,38 @@ impl Keyspace {
     ///
     /// Will return `Err` if an IO error occurs.
     pub fn clear(&self) -> crate::Result<()> {
-        use std::sync::atomic::Ordering;
+        let persist_mode = self.persist_mode();
 
-        let mut journal_writer = self.supervisor.journal.get_writer();
+        let (seqno, _op) = self.supervisor.write_group.submit(
+            WriteOp::Clear {
+                keyspace_id: self.id,
+            },
+            persist_mode,
+            &self.supervisor.journal,
+            &self.supervisor.seqno,
+            &self.is_poisoned,
+            &self.supervisor.pending_watermark,
+        )?;
 
-        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
-        if self.is_poisoned.load(Ordering::Relaxed) {
-            return Err(crate::Error::Poisoned);
+        // NOTE: tree.clear() failure after journaling creates WAL/memtable
+        // divergence (recovery replays the clear even though the API returned
+        // an error). This matches pre-group-commit behavior — the original code
+        // also propagated tree.clear() errors without poisoning. Poisoning here
+        // would be a correctness improvement but changes the public error contract
+        // and belongs in a separate PR.
+        match self.tree.clear() {
+            Ok(()) => {
+                self.supervisor.pending_watermark.applied(seqno);
+                Ok(())
+            }
+            Err(e) => {
+                // Remove from pending without advancing the visible watermark at
+                // this point — the data is journaled but not in the memtable, so
+                // we avoid publishing this seqno as visible for snapshot reads here.
+                self.supervisor.pending_watermark.aborted(seqno);
+                Err(e.into())
+            }
         }
-
-        let seqno = self.supervisor.seqno.next();
-
-        journal_writer.write_clear(self.id, seqno)?;
-
-        if !self.config.manual_journal_persist {
-            journal_writer
-                .persist(crate::PersistMode::Buffer)
-                .map_err(|e| {
-                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
-                    self.is_poisoned.store(true, Ordering::Relaxed);
-                    e
-                })?;
-        }
-
-        self.tree.clear()?;
-
-        self.supervisor.snapshot_tracker.publish(seqno);
-
-        drop(journal_writer);
-
-        Ok(())
     }
 
     /// Returns the number of blob bytes on disk that are not referenced.
@@ -761,6 +773,8 @@ impl Keyspace {
             // we never opened a snapshot, we need to pull the watermark up
             //
             // https://github.com/fjall-rs/fjall/discussions/85
+            // NOTE: pullup() updates lowest_freed_instant (GC watermark), NOT
+            // visible_seqno. Safe to call directly — does not bypass PendingWatermark.
             self.supervisor.snapshot_tracker.pullup();
             self.supervisor.snapshot_tracker.gc();
 
@@ -928,32 +942,34 @@ impl Keyspace {
         let key = key.into();
         let value = value.into();
 
-        let mut journal_writer = self.supervisor.journal.get_writer();
+        let persist_mode = self.persist_mode();
 
-        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
-        if self.is_poisoned.load(Ordering::Relaxed) {
-            return Err(crate::Error::Poisoned);
-        }
+        let (seqno, op) = self.supervisor.write_group.submit(
+            WriteOp::Raw {
+                keyspace_id: self.id,
+                key,
+                value,
+                value_type: lsm_tree::ValueType::Value,
+            },
+            persist_mode,
+            &self.supervisor.journal,
+            &self.supervisor.seqno,
+            &self.is_poisoned,
+            &self.supervisor.pending_watermark,
+        )?;
 
-        let seqno = self.supervisor.seqno.next();
-
-        journal_writer.write_raw(self.id, &key, &value, lsm_tree::ValueType::Value, seqno)?;
-
-        if !self.config.manual_journal_persist {
-            journal_writer
-                .persist(crate::PersistMode::Buffer)
-                .map_err(|e| {
-                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
-                    self.is_poisoned.store(true, Ordering::Relaxed);
-                    e
-                })?;
-        }
+        // WriteGroup returns the same variant that was submitted — this is a
+        // type-system invariant, not a runtime condition. unreachable! is correct
+        // because a variant mismatch indicates a logic bug in WriteGroup itself.
+        // No #[expect(clippy::missing_panics_doc)] needed — that lint is not
+        // enabled in this crate (pedantic, not deny).
+        let WriteOp::Raw { key, value, .. } = op else {
+            unreachable!("submitted Raw, must get Raw back");
+        };
 
         let (item_size, memtable_size) = self.tree.insert(key, value, seqno);
 
-        self.supervisor.snapshot_tracker.publish(seqno);
-
-        drop(journal_writer);
+        self.supervisor.pending_watermark.applied(seqno);
 
         self.supervisor.write_buffer_size.allocate(item_size);
         self.maintenance(memtable_size);
@@ -989,38 +1005,35 @@ impl Keyspace {
         let key = key.into();
         let operand = operand.into();
 
-        let mut journal_writer = self.supervisor.journal.get_writer();
+        let persist_mode = self.persist_mode();
 
-        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
-        if self.is_poisoned.load(Ordering::Relaxed) {
-            return Err(crate::Error::Poisoned);
-        }
-
-        let seqno = self.supervisor.seqno.next();
-
-        journal_writer.write_raw(
-            self.id,
-            &key,
-            &operand,
-            lsm_tree::ValueType::MergeOperand,
-            seqno,
+        let (seqno, op) = self.supervisor.write_group.submit(
+            WriteOp::Raw {
+                keyspace_id: self.id,
+                key,
+                value: operand,
+                value_type: lsm_tree::ValueType::MergeOperand,
+            },
+            persist_mode,
+            &self.supervisor.journal,
+            &self.supervisor.seqno,
+            &self.is_poisoned,
+            &self.supervisor.pending_watermark,
         )?;
 
-        if !self.config.manual_journal_persist {
-            journal_writer
-                .persist(crate::PersistMode::Buffer)
-                .map_err(|e| {
-                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
-                    self.is_poisoned.store(true, Ordering::Relaxed);
-                    e
-                })?;
-        }
+        // See insert() for why unreachable! is correct here
+        let WriteOp::Raw {
+            key,
+            value: operand,
+            ..
+        } = op
+        else {
+            unreachable!("submitted Raw, must get Raw back");
+        };
 
         let (item_size, memtable_size) = self.tree.merge(key, operand, seqno);
 
-        self.supervisor.snapshot_tracker.publish(seqno);
-
-        drop(journal_writer);
+        self.supervisor.pending_watermark.applied(seqno);
 
         self.supervisor.write_buffer_size.allocate(item_size);
         self.maintenance(memtable_size);
@@ -1066,32 +1079,30 @@ impl Keyspace {
 
         let key = key.into();
 
-        let mut journal_writer = self.supervisor.journal.get_writer();
+        let persist_mode = self.persist_mode();
 
-        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
-        if self.is_poisoned.load(Ordering::Relaxed) {
-            return Err(crate::Error::Poisoned);
-        }
+        let (seqno, op) = self.supervisor.write_group.submit(
+            WriteOp::Raw {
+                keyspace_id: self.id,
+                key,
+                value: UserValue::empty(),
+                value_type: lsm_tree::ValueType::Tombstone,
+            },
+            persist_mode,
+            &self.supervisor.journal,
+            &self.supervisor.seqno,
+            &self.is_poisoned,
+            &self.supervisor.pending_watermark,
+        )?;
 
-        let seqno = self.supervisor.seqno.next();
-
-        journal_writer.write_raw(self.id, &key, &[], lsm_tree::ValueType::Tombstone, seqno)?;
-
-        if !self.config.manual_journal_persist {
-            journal_writer
-                .persist(crate::PersistMode::Buffer)
-                .map_err(|e| {
-                    log::error!("persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}");
-                    self.is_poisoned.store(true, Ordering::Relaxed);
-                    e
-                })?;
-        }
+        // See insert() for why unreachable! is correct here
+        let WriteOp::Raw { key, .. } = op else {
+            unreachable!("submitted Raw, must get Raw back");
+        };
 
         let (item_size, memtable_size) = self.tree.remove(key, seqno);
 
-        self.supervisor.snapshot_tracker.publish(seqno);
-
-        drop(journal_writer);
+        self.supervisor.pending_watermark.applied(seqno);
 
         self.supervisor.write_buffer_size.allocate(item_size);
         self.maintenance(memtable_size);
@@ -1149,40 +1160,30 @@ impl Keyspace {
 
         let key = key.into();
 
-        let mut journal_writer = self.supervisor.journal.get_writer();
+        let persist_mode = self.persist_mode();
 
-        // IMPORTANT: Check the poisoned flag after getting journal mutex, otherwise TOCTOU
-        if self.is_poisoned.load(Ordering::Relaxed) {
-            return Err(crate::Error::Poisoned);
-        }
-
-        let seqno = self.supervisor.seqno.next();
-
-        journal_writer.write_raw(
-            self.id,
-            &key,
-            &[],
-            lsm_tree::ValueType::WeakTombstone,
-            seqno,
+        let (seqno, op) = self.supervisor.write_group.submit(
+            WriteOp::Raw {
+                keyspace_id: self.id,
+                key,
+                value: UserValue::empty(),
+                value_type: lsm_tree::ValueType::WeakTombstone,
+            },
+            persist_mode,
+            &self.supervisor.journal,
+            &self.supervisor.seqno,
+            &self.is_poisoned,
+            &self.supervisor.pending_watermark,
         )?;
 
-        if !self.config.manual_journal_persist {
-            journal_writer
-                .persist(crate::PersistMode::Buffer)
-                .map_err(|e| {
-                    log::error!(
-                        "persist failed, which is a FATAL, and possibly hardware-related, failure: {e:?}"
-                    );
-                    self.is_poisoned.store(true, Ordering::Relaxed);
-                    e
-                })?;
-        }
+        // See insert() for why unreachable! is correct here
+        let WriteOp::Raw { key, .. } = op else {
+            unreachable!("submitted Raw, must get Raw back");
+        };
 
-        let (item_size, memtable_size) = self.tree.remove(key, seqno);
+        let (item_size, memtable_size) = self.tree.remove_weak(key, seqno);
 
-        self.supervisor.snapshot_tracker.publish(seqno);
-
-        drop(journal_writer);
+        self.supervisor.pending_watermark.applied(seqno);
 
         self.supervisor.write_buffer_size.allocate(item_size);
         self.maintenance(memtable_size);
