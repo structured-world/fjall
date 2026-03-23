@@ -164,6 +164,7 @@ impl WriteBatch {
                     // Defense-in-depth: WriteBatch::merge doesn't validate at
                     // enqueue time, so check here before writing to the tree.
                     if item.keyspace.config.merge_operator.is_none() {
+                        self.db.supervisor.pending_watermark.aborted(batch_seqno);
                         return Err(crate::Error::MissingMergeOperator);
                     }
                     item.keyspace.tree.merge(item.key, item.value, batch_seqno)
