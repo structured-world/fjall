@@ -222,10 +222,11 @@ impl WriteGroup {
             let writes = {
                 #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
                 let mut inner = self.inner.lock().expect("write group lock poisoned");
-                // take() is intentional: we want a fresh Vec each iteration so
-                // the previous batch's allocation is moved into `writes` and freed
-                // after delivery. Reusing capacity via drain() would hold memory
-                // from the largest-ever batch for the lifetime of the WriteGroup.
+                // take() is intentional over drain()+reuse: Vec::new() is zero-cost
+                // (no alloc until first push), and the old allocation is freed with
+                // `writes` after delivery. Reusing capacity would retain the high-water
+                // mark from the largest-ever batch permanently. The per-iteration
+                // realloc cost is negligible vs journal I/O + fsync.
                 let pending = std::mem::take(&mut inner.pending);
                 if pending.is_empty() {
                     // Queue is empty — release leadership and exit
