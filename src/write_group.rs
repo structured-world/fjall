@@ -340,8 +340,8 @@ impl WriteGroup {
     }
 }
 
-/// Tracks pending write seqnos and ensures the MVCC visible watermark
-/// only advances through consecutively-applied seqnos.
+/// Tracks pending write seqnos to prevent the MVCC visible watermark
+/// from advancing past seqnos whose memtable applies are still in flight.
 ///
 /// Without this, concurrent memtable-apply + publish after group commit
 /// can advance the watermark past seqnos whose writes haven't been applied
@@ -352,9 +352,11 @@ impl WriteGroup {
 /// 1. The group commit leader **registers** all seqnos in the group as pending
 ///    (while holding the journal mutex, before any memtable apply).
 /// 2. Each caller **applies** its write to the memtable, then calls [`applied`].
+///    On failure, the caller calls [`aborted`] instead.
 /// 3. `applied` removes the seqno from the pending set and advances the
-///    watermark to `min(pending) - 1` — i.e., all seqnos below the lowest
-///    still-pending one are guaranteed visible.
+///    watermark to `min(pending) - 1`. `aborted` removes from pending
+///    without advancing — the watermark will advance past the aborted
+///    seqno only when a later `applied()` finds no lower pending seqnos.
 pub struct PendingWatermark {
     inner: Mutex<WatermarkInner>,
     snapshot_tracker: SnapshotTracker,
