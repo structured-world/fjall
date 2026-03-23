@@ -773,6 +773,8 @@ impl Keyspace {
             // we never opened a snapshot, we need to pull the watermark up
             //
             // https://github.com/fjall-rs/fjall/discussions/85
+            // NOTE: pullup() updates lowest_freed_instant (GC watermark), NOT
+            // visible_seqno. Safe to call directly — does not bypass PendingWatermark.
             self.supervisor.snapshot_tracker.pullup();
             self.supervisor.snapshot_tracker.gc();
 
