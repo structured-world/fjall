@@ -394,6 +394,15 @@ impl PendingWatermark {
     /// Use when the memtable apply failed — the journal entry exists but
     /// the data is not in the memtable. This unblocks the watermark for
     /// other seqnos without falsely claiming this seqno is visible.
+    ///
+    /// # Design choice: remove vs keep in pending
+    ///
+    /// Keeping the seqno in pending would permanently freeze the watermark,
+    /// blocking ALL subsequent MVCC visibility — a worse outcome than the
+    /// transient inconsistency from removing it. The aborted seqno's data
+    /// will be replayed from the journal on next recovery, restoring
+    /// consistency. This matches the pre-group-commit error behavior where
+    /// `tree.clear()` failures propagated without poisoning.
     pub(crate) fn aborted(&self, seqno: SeqNo) {
         #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
         let mut inner = self.inner.lock().expect("watermark lock poisoned");
@@ -409,10 +418,12 @@ impl PendingWatermark {
         #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
         let mut inner = self.inner.lock().expect("watermark lock poisoned");
         let removed = inner.pending.remove(&seqno);
-        debug_assert!(
-            removed,
-            "PendingWatermark::applied called with unknown or already-applied seqno: {seqno}",
-        );
+        if !removed {
+            log::error!(
+                "PendingWatermark::applied called with unknown or already-applied seqno: {seqno}"
+            );
+            return;
+        }
 
         // The safe watermark is one below the lowest still-pending seqno.
         // If nothing is pending, all registered writes are applied.
@@ -699,5 +710,28 @@ mod tests {
         wm.applied(0);
         // Both done, watermark advances
         assert_eq!(visible.get(), 2); // publish(1) → fetch_max(1+1) = 2
+    }
+
+    #[test]
+    fn watermark_aborted_unblocks_without_advancing() {
+        let visible = make_seqno();
+        let wm = PendingWatermark::new(SnapshotTracker::new(Arc::clone(&visible)));
+
+        wm.register(&[0, 1, 2]);
+
+        // Apply seqno 0
+        wm.applied(0);
+        // Seqno 1 still pending → watermark stays at 1
+        assert_eq!(visible.get(), 1);
+
+        // Abort seqno 1 (memtable apply failed) — removes from pending
+        // without advancing watermark
+        wm.aborted(1);
+        // Seqno 1 removed, but aborted() doesn't publish → watermark still 1
+        assert_eq!(visible.get(), 1);
+
+        // Apply seqno 2 — all pending cleared, watermark advances to max_registered
+        wm.applied(2);
+        assert_eq!(visible.get(), 3); // publish(2) → fetch_max(2+1) = 3
     }
 }
