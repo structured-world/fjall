@@ -192,6 +192,12 @@ impl WriteGroup {
         leader_slot: &Arc<WriteSlot>,
         watermark: &PendingWatermark,
     ) -> crate::Result<(SeqNo, WriteOp)> {
+        // Limit how many batches one leader processes before yielding the
+        // journal writer. Without this, a hot write stream can keep the loop
+        // alive indefinitely, starving rotate_memtable() which also needs
+        // the journal writer (see keyspace/mod.rs::rotate_memtable).
+        const MAX_BATCHES_PER_LEADER: usize = 8;
+
         // Acquire journal writer (serialization point with rotate/recovery)
         let mut journal_writer = journal.get_writer();
 
@@ -204,10 +210,11 @@ impl WriteGroup {
         }
 
         let mut leader_result = None;
+        let mut batches_processed = 0;
 
-        // Loop: keep draining the queue until empty. Followers that push
-        // while we are processing get picked up in the next iteration,
-        // avoiding the deadlock where writes sit in the queue with no leader.
+        // Loop: keep draining the queue until empty or budget exhausted.
+        // Followers that push while we are processing get picked up in
+        // the next iteration (or by the next elected leader).
         loop {
             let writes = {
                 #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
@@ -314,6 +321,17 @@ impl WriteGroup {
                         op: write.op,
                     });
                 }
+            }
+
+            batches_processed += 1;
+            if batches_processed >= MAX_BATCHES_PER_LEADER {
+                // Yield the journal writer so rotate_memtable() and other
+                // operations can acquire it. Remaining pending writes will
+                // be picked up by the next elected leader.
+                #[expect(clippy::expect_used, reason = "poisoned lock is unrecoverable")]
+                let mut inner = self.inner.lock().expect("write group lock poisoned");
+                inner.leader_active = false;
+                break;
             }
         }
 
