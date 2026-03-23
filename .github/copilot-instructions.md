@@ -1,4 +1,4 @@
-# GitHub Copilot Instructions for fjall (structured-world fork)
+# GitHub Copilot Instructions for coordinode-fjall (structured-world fork)
 
 ## Project Overview
 

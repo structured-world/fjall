@@ -3,17 +3,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/structured-world/fjall/actions/workflows/coordinode-ci.yml">
-    <img src="https://github.com/structured-world/fjall/actions/workflows/coordinode-ci.yml/badge.svg" alt="CoordiNode CI" />
+  <a href="https://github.com/structured-world/coordinode-fjall/actions/workflows/coordinode-ci.yml">
+    <img src="https://github.com/structured-world/coordinode-fjall/actions/workflows/coordinode-ci.yml/badge.svg" alt="CoordiNode CI" />
   </a>
   <a href="https://github.com/fjall-rs/fjall/actions/workflows/test.yml">
     <img src="https://github.com/fjall-rs/fjall/actions/workflows/test.yml/badge.svg" alt="Upstream CI" />
   </a>
-  <a href="https://docs.rs/fjall">
-    <img src="https://img.shields.io/docsrs/fjall?color=green" alt="docs.rs" />
+  <a href="https://docs.rs/coordinode-fjall">
+    <img src="https://img.shields.io/docsrs/coordinode-fjall?color=green" alt="docs.rs" />
   </a>
-  <a href="https://crates.io/crates/fjall">
-    <img src="https://img.shields.io/crates/v/fjall?color=blue" alt="Crates.io" />
+  <a href="https://crates.io/crates/coordinode-fjall">
+    <img src="https://img.shields.io/crates/v/coordinode-fjall?color=blue" alt="Crates.io" />
   </a>
   <img src="https://img.shields.io/badge/MSRV-1.90.0-blue" alt="MSRV" />
 </p>

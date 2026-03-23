@@ -1,17 +1,16 @@
 [package]
-name = "fjall"
-description = "Log-structured, embeddable key-value storage engine"
+name = "coordinode-fjall"
+description = "Log-structured, embeddable key-value storage engine — CoordiNode fork"
 license = "MIT OR Apache-2.0"
 version = "4.0.0"
 edition = "2021"
 rust-version = "1.90.0"
 readme = "README.md"
 include = ["src/**/*", "LICENSE-APACHE", "LICENSE-MIT", "README.md"]
-repository = "https://github.com/structured-world/fjall"
-# homepage points to upstream — docs.rs and project docs live there
-homepage = "https://github.com/fjall-rs/fjall"
-keywords = ["database", "key-value", "lsm", "rocksdb", "leveldb"]
-categories = ["data-structures", "database-implementations", "algorithms"]
+repository = "https://github.com/structured-world/coordinode-fjall"
+homepage = "https://github.com/structured-world/coordinode-fjall"
+keywords = ["database", "key-value", "storage", "coordinode", "embedded-database"]
+categories = ["database-implementations"]
 
 [lib]
 name = "fjall"
