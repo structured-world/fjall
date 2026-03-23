@@ -115,7 +115,10 @@ impl WriteBatch {
     /// # Errors
     ///
     /// Will return `Err` if an IO error occurs.
-    #[allow(clippy::missing_panics_doc)]
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "unreachable! for programmer invariant"
+    )]
     pub fn commit(mut self) -> crate::Result<()> {
         if self.is_empty() {
             return Ok(());
