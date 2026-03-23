@@ -1171,7 +1171,7 @@ impl Keyspace {
             unreachable!("submitted Raw, must get Raw back");
         };
 
-        let (item_size, memtable_size) = self.tree.remove(key, seqno);
+        let (item_size, memtable_size) = self.tree.remove_weak(key, seqno);
 
         self.supervisor.pending_watermark.applied(seqno);
 

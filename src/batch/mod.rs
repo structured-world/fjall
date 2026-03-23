@@ -126,6 +126,16 @@ impl WriteBatch {
 
         let items = std::mem::take(&mut self.data);
 
+        // Validate merge operands BEFORE journaling — reject early to avoid
+        // partial journal+memtable state that requires aborted() cleanup.
+        for item in &items {
+            if item.value_type == ValueType::MergeOperand
+                && item.keyspace.config.merge_operator.is_none()
+            {
+                return Err(crate::Error::MissingMergeOperator);
+            }
+        }
+
         log::trace!("batch: Submitting {} items to write group", items.len());
 
         let (batch_seqno, op) = self.db.supervisor.write_group.submit(
@@ -163,17 +173,8 @@ impl WriteBatch {
                 ValueType::Value => item.keyspace.tree.insert(item.key, item.value, batch_seqno),
                 ValueType::Tombstone => item.keyspace.tree.remove(item.key, batch_seqno),
                 ValueType::WeakTombstone => item.keyspace.tree.remove_weak(item.key, batch_seqno),
+                // SAFETY: merge_operator validated in the pre-journal check above
                 ValueType::MergeOperand => {
-                    // Defense-in-depth: WriteBatch::merge validates at enqueue time,
-                    // so this branch is unreachable in normal use. If hit, earlier
-                    // items in the batch are already applied — rolling them back would
-                    // require memtable-level undo which is out of scope for this PR.
-                    // The aborted() call unblocks the watermark without claiming
-                    // visibility; recovery replays the full journaled batch.
-                    if item.keyspace.config.merge_operator.is_none() {
-                        self.db.supervisor.pending_watermark.aborted(batch_seqno);
-                        return Err(crate::Error::MissingMergeOperator);
-                    }
                     item.keyspace.tree.merge(item.key, item.value, batch_seqno)
                 }
                 ValueType::Indirection => unreachable!(),
