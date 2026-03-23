@@ -275,9 +275,9 @@ impl Keyspace {
                 Ok(())
             }
             Err(e) => {
-                // Remove from pending without advancing watermark — the data
-                // is journaled but not in the memtable, so snapshot reads must
-                // not observe this seqno as visible.
+                // Remove from pending without advancing the visible watermark at
+                // this point — the data is journaled but not in the memtable, so
+                // we avoid publishing this seqno as visible for snapshot reads here.
                 self.supervisor.pending_watermark.aborted(seqno);
                 Err(e.into())
             }
