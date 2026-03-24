@@ -1,0 +1,58 @@
+use crate::config::BenchConfig;
+use crate::db::{make_sequential_key, make_value};
+use crate::reporter::Reporter;
+use crate::workloads::Workload;
+use fjall::{Database, Keyspace};
+use std::time::Instant;
+
+/// Measures write throughput across multiple keyspaces.
+/// Exercises keyspace partition switching overhead.
+pub struct MultiKeyspace;
+
+impl Workload for MultiKeyspace {
+    fn run(
+        &self,
+        _db: &Database,
+        _keyspace: &Keyspace,
+        config: &BenchConfig,
+        reporter: &mut Reporter,
+    ) -> fjall::Result<()> {
+        let tmpdir = tempfile::tempdir().map_err(|e| fjall::Error::Io(std::io::Error::other(e)))?;
+
+        let mut builder =
+            Database::builder(tmpdir.path()).cache_size(config.cache_mb * 1024 * 1024);
+
+        if config.disable_wal {
+            builder = builder.journal_mode(fjall::JournalMode::Noop);
+        }
+
+        let db = builder.open()?;
+
+        let num_keyspaces = config.keyspaces;
+        let keyspaces: Vec<Keyspace> = (0..num_keyspaces)
+            .map(|i| db.keyspace(&format!("ks_{i}"), fjall::KeyspaceCreateOptions::default))
+            .collect::<fjall::Result<Vec<_>>>()?;
+
+        reporter.start();
+
+        for i in 0..config.num {
+            let ks_idx = (i as usize) % num_keyspaces;
+            let ks = &keyspaces[ks_idx];
+            let key = make_sequential_key(i, config.key_size);
+            let value = make_value(config.value_size);
+
+            let t = Instant::now();
+            ks.insert(key, value)?;
+            reporter.record_duration(t.elapsed());
+        }
+
+        reporter.stop();
+
+        eprintln!(
+            "Wrote {} entries across {} keyspaces",
+            config.num, num_keyspaces,
+        );
+
+        Ok(())
+    }
+}
