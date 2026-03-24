@@ -36,17 +36,18 @@ jobs:
         run: bash .github/scripts/run-benchmarks.sh 200000
 
       - name: Store benchmark results
-        if: steps.bot-token.outputs.token != ''
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: "fjall db_bench"
           tool: customBiggerIsBetter
           output-file-path: benchmark-results.json
-          github-token: ${{ steps.bot-token.outputs.token }}
+          github-token: ${{ steps.bot-token.outputs.token || '' }}
           # Push results to gh-pages only on main (not PRs)
           auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          # On PRs, comment with comparison against baseline
-          comment-on-alert: true
+          # On PRs, show Job Summary even without token (fork PRs)
+          summary-always: ${{ github.event_name == 'pull_request' }}
+          # Comment requires token — skip silently for fork PRs
+          comment-on-alert: ${{ steps.bot-token.outputs.token != '' }}
           alert-comment-cc-users: "@polaz"
           # PRs: fail at 15% regression (fail-on-alert). Main: alert-only at 15%.
           # fail-threshold (25%) acts as an absolute ceiling on main pushes.

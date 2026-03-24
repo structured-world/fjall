@@ -66,21 +66,16 @@ impl Workload for ReadWhileWriting {
                 })
                 .collect();
 
-            // Background writer thread.
-            let writer_handle = s.spawn(|| {
+            // Background writer thread — errors propagate to fail the workload.
+            let writer_handle = s.spawn(|| -> fjall::Result<()> {
                 barrier.wait();
 
                 for _ in 0..config.num {
                     let key = make_random_key(config.key_size);
                     let value = make_value(config.value_size);
-                    // Writer errors are logged but don't fail the benchmark —
-                    // this matches RocksDB where BGWriter errors are non-fatal.
-                    // Reader throughput is the measured metric, writer is pressure only.
-                    if let Err(e) = keyspace.insert(key, value) {
-                        eprintln!("readwhilewriting: background writer error: {e}");
-                        break;
-                    }
+                    keyspace.insert(key, value)?;
                 }
+                Ok(())
             });
 
             // Only reader ops are counted — this is a read throughput benchmark
@@ -92,7 +87,7 @@ impl Workload for ReadWhileWriting {
             }
 
             #[expect(clippy::expect_used, reason = "writer panic is unrecoverable")]
-            writer_handle.join().expect("writer thread panicked");
+            writer_handle.join().expect("writer thread panicked")?;
 
             // Intentionally stop after writer join — elapsed must cover the full
             // concurrent read+write window. Stopping after readers but before writer

@@ -84,6 +84,10 @@ impl Reporter {
     }
 
     /// Compute derived metrics from raw histogram + elapsed time.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "benchmark metrics don't need exact u64 precision"
+    )]
     pub fn summary(&self, entry_size: usize) -> Summary {
         let secs = self.elapsed.as_secs_f64();
         let ops = self.ops_counted;
