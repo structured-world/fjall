@@ -38,6 +38,7 @@ pub struct BenchConfig {
     pub cache_size: u64,
     pub compression_type: Compression,
     pub disable_wal: bool,
+    #[expect(dead_code, reason = "reserved for PersistMode::SyncAll wiring")]
     pub sync: bool,
     pub keyspaces: usize,
 }

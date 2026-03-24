@@ -119,7 +119,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    if cli.json && cli.benchmarks.contains(',') || cli.json && cli.benchmarks == "all" {
+    if cli.json && (cli.benchmarks.contains(',') || cli.benchmarks == "all") {
         eprintln!("Error: --json does not support multiple benchmarks; use --github_json");
         std::process::exit(1);
     }
