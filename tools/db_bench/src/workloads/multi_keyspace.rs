@@ -47,9 +47,13 @@ impl Workload for MultiKeyspace {
 
         reporter.start();
 
+        let mut ks_idx: usize = 0;
         for i in 0..config.num {
-            let ks_idx = (i as usize) % num_keyspaces;
             let ks = &keyspaces[ks_idx];
+            ks_idx += 1;
+            if ks_idx == num_keyspaces {
+                ks_idx = 0;
+            }
             let key = make_sequential_key(i, config.key_size);
             let value = make_value(config.value_size);
 
