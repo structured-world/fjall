@@ -42,10 +42,8 @@ pub fn fill_sequential_key(buf: &mut [u8], index: u64) {
         buf[..8].copy_from_slice(&be_bytes);
         buf[8..].fill(0);
     } else {
-        debug_assert!(
-            index < (1u64 << (key_size * 8)),
-            "index {index} exceeds unique key space for key_size {key_size}"
-        );
+        // No assert: CLI warns about key repeats when num > key space,
+        // and truncation here is the correct behavior (keys wrap).
         buf.copy_from_slice(&be_bytes[8 - key_size..]);
     }
 }
