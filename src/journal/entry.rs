@@ -129,6 +129,8 @@ pub(super) fn serialize_item_payload<W: Write>(
 
     compression.encode_into(writer)?;
 
+    // Exhaustive: CompressionType variants are feature-gated in lsm-tree,
+    // so disabled features remove both the variant and the arm.
     let compressed_value = match compression {
         CompressionType::None => std::borrow::Cow::Borrowed(value),
 
@@ -243,6 +245,8 @@ fn decode_item_payload<R: Read>(
 
     let key = Slice::from_reader(reader, usize::from(key_len))?;
 
+    // Exhaustive: CompressionType variants are feature-gated in lsm-tree,
+    // so disabled features remove both the variant and the arm.
     let value = match compression {
         CompressionType::None => {
             debug_assert_eq!(value_len, on_disk_value_len);
