@@ -19,7 +19,7 @@ impl Workload for Recovery {
         reporter: &mut Reporter,
     ) -> fjall::Result<()> {
         if config.disable_wal {
-            eprintln!("recovery: skipped (--disable_wal incompatible with WAL replay benchmark)");
+            eprintln!("recovery: skipped (--disable_wal has no journal to measure reopen against)");
             reporter.start();
             reporter.stop();
             return Ok(());
