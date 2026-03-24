@@ -19,7 +19,7 @@ impl Workload for TxnCommit {
     ) -> fjall::Result<()> {
         // Create a dedicated OCC database — the shared Database doesn't support
         // optimistic transactions.
-        let tmpdir = tempfile::tempdir().map_err(|e| fjall::Error::Io(std::io::Error::other(e)))?;
+        let tmpdir = tempfile::tempdir()?;
         let mut builder =
             OptimisticTxDatabase::builder(tmpdir.path()).cache_size(config.cache_size);
 

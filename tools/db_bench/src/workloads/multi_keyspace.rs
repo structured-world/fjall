@@ -23,7 +23,7 @@ impl Workload for MultiKeyspace {
             )));
         }
 
-        let tmpdir = tempfile::tempdir().map_err(|e| fjall::Error::Io(std::io::Error::other(e)))?;
+        let tmpdir = tempfile::tempdir()?;
 
         let mut builder = Database::builder(tmpdir.path()).cache_size(config.cache_size);
 

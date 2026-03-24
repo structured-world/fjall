@@ -25,7 +25,7 @@ impl Workload for Recovery {
             return Ok(());
         }
 
-        let tmpdir = tempfile::tempdir().map_err(|e| fjall::Error::Io(std::io::Error::other(e)))?;
+        let tmpdir = tempfile::tempdir()?;
         let path = tmpdir.path().to_path_buf();
 
         // Phase 1: populate database.
@@ -33,7 +33,12 @@ impl Workload for Recovery {
             let db = Database::builder(&path)
                 .cache_size(config.cache_size)
                 .open()?;
-            let ks = db.keyspace("bench", fjall::KeyspaceCreateOptions::default)?;
+            let compression_policy =
+                fjall::config::CompressionPolicy::all(config.compression_type.to_fjall());
+            let ks = db.keyspace("bench", || {
+                fjall::KeyspaceCreateOptions::default()
+                    .data_block_compression_policy(compression_policy)
+            })?;
 
             for i in 0..config.num {
                 let key = make_sequential_key(i, config.key_size);
