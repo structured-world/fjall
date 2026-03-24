@@ -34,7 +34,8 @@ pub fn make_sequential_key(index: u64, key_size: usize) -> Vec<u8> {
 #[inline]
 pub fn fill_sequential_key(buf: &mut [u8], index: u64) {
     let key_size = buf.len();
-    assert!(key_size > 0, "key_size must be > 0");
+    // --key_size validated in main; debug_assert avoids per-op overhead in release.
+    debug_assert!(key_size > 0, "key_size must be > 0");
     let be_bytes = index.to_be_bytes();
 
     if key_size >= 8 {

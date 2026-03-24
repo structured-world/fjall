@@ -20,8 +20,8 @@ impl Workload for Recovery {
     ) -> fjall::Result<()> {
         if config.disable_wal {
             eprintln!("recovery: skipped (--disable_wal has no journal to measure reopen against)");
-            reporter.start();
-            reporter.stop();
+            // Return without touching reporter — main.rs will see 0 ops and
+            // skip emitting a github JSON entry for this workload.
             return Ok(());
         }
 

@@ -233,6 +233,10 @@ fn run_single(
 
     if cli.github_json {
         let s = reporter.summary(entry_size);
+        // Skip emitting a datapoint for workloads that were skipped (0 ops).
+        if s.ops == 0 {
+            return Ok(());
+        }
         let unit = if benchmark_name == "recovery" {
             "reopens/sec"
         } else {
