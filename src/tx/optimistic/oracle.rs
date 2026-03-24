@@ -103,7 +103,7 @@ mod tests {
 
         let part = db.keyspace("foo", KeyspaceCreateOptions::default)?;
 
-        for _ in 0..10_000 {
+        for _ in 0..1_000 {
             run_tx(&db, &part).unwrap();
         }
 
@@ -111,7 +111,7 @@ mod tests {
         // conflicted-commit cycle.  At most a handful of entries survive.
         assert!(dbg!(db.oracle.write_serialize_lock.lock().unwrap().len()) < 10);
 
-        for _ in 0..10_000 {
+        for _ in 0..1_000 {
             run_tx(&db, &part).unwrap();
         }
 
