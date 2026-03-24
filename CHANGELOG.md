@@ -7,6 +7,20 @@
 
 ## [Unreleased]
 
+## [4.1.0](https://github.com/structured-world/coordinode-fjall/compare/v4.0.0...v4.1.0) - 2026-03-24
+
+### Added
+
+- db_bench tool + benchmark CI workflow + gh-pages dashboard ([#46](https://github.com/structured-world/coordinode-fjall/pull/46))
+
+### Documentation
+
+- add codecov, benchmarks, deps.rs, license badges to README ([#54](https://github.com/structured-world/coordinode-fjall/pull/54))
+
+### Fixed
+
+- *(oracle)* reclaim committed_txns entries on every commit ([#51](https://github.com/structured-world/coordinode-fjall/pull/51))
+
 ## [4.0.0] — Fork Epoch (2026-03-23)
 
 First release of `coordinode-fjall` — maintained fork of [fjall-rs/fjall](https://github.com/fjall-rs/fjall) v3.1.1.
