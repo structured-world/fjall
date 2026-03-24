@@ -1,0 +1,59 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Performance regression check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Generate bot token
+        id: bot-token
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASER_APP_ID }}
+          private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: bench
+
+      - name: Run benchmarks
+        run: bash .github/scripts/run-benchmarks.sh 200000
+
+      - name: Store benchmark results
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: "fjall db_bench"
+          tool: customBiggerIsBetter
+          output-file-path: benchmark-results.json
+          github-token: ${{ steps.bot-token.outputs.token || '' }}
+          # Push results to gh-pages only on main (not PRs)
+          auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          # On PRs, show Job Summary even without token (fork PRs)
+          summary-always: ${{ github.event_name == 'pull_request' }}
+          # Comment requires token — skip silently for fork PRs
+          comment-on-alert: ${{ steps.bot-token.outputs.token != '' }}
+          alert-comment-cc-users: "@polaz"
+          # PRs: fail at 15% regression (fail-on-alert). Main: alert-only at 15%.
+          # fail-threshold (25%) acts as an absolute ceiling on main pushes.
+          alert-threshold: "115%"
+          fail-threshold: "125%"
+          fail-on-alert: ${{ github.event_name == 'pull_request' }}
+          # Only persist benchmark data on main pushes (PRs compare against existing baseline)
+          save-data-file: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          benchmark-data-dir-path: dev/bench
