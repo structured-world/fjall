@@ -97,7 +97,7 @@ mod tests {
 
     #[expect(clippy::unwrap_used)]
     #[test]
-    #[ignore = "pre-existing: committed_txns GC not reclaiming entries (upstream bug)"]
+    #[ignore = "committed_txns GC not reclaiming entries (#47); re-enable after fix"]
     fn oracle_committed_txns_does_not_leak() -> crate::Result<()> {
         let tmpdir = tempfile::tempdir()?;
         let db = OptimisticTxDatabase::builder(tmpdir.path()).open()?;
